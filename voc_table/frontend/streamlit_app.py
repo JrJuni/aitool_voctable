@@ -100,7 +100,7 @@ def validate_session_token(token: str, email: str) -> bool:
 
 def auto_login_from_url():
     """URL 파라미터에서 자동 로그인 시도"""
-    query_params = st.query_params
+    query_params = st.experimental_get_query_params()
     
     if 'token' in query_params and 'email' in query_params:
         token = query_params['token']

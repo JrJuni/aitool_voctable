@@ -1,0 +1,8 @@
+2025-09-25 12:14:03,620 | WARNING | (trapped) error reading bcrypt version
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.11/site-packages/passlib/handlers/bcrypt.py", line 620, in _load_backend_mixin
+    version = _bcrypt.__about__.__version__
+              ^^^^^^^^^^^^^^^^^
+AttributeError: module 'bcrypt' has no attribute '__about__'
+2025-09-25 12:14:03,958 | INFO | USER_CREATE | user_id=1 | email=admin@mobilint.com | auth_level=0 | ip=172.18.0.1
+2025-09-25 12:20:12,453 | INFO | LOGIN_SUCCESS | user_id=1 | email=admin@mobilint.com | ip=172.18.0.1 | ua=curl/8.4.0
