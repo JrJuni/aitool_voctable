@@ -1,0 +1,27 @@
+{
+  "admin@mobilint.com": {
+    "username": "admin",
+    "password_hash": "f372b902a555bf526112680888a7a4926b6cee15bab448fa4bfa2457126cd290",
+    "auth_level": 5,
+    "is_active": true,
+    "department": "admin"
+  },
+  "admin@example.com": {
+    "username": "admin",
+    "password_hash": "9af15b336e6a9619928537df30b2e6a2376569fcf9d7e773eccede65606529a0",
+    "auth_level": 0,
+    "is_active": true
+  },
+  "user@example.com": {
+    "username": "user",
+    "password_hash": "ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f",
+    "auth_level": 3,
+    "is_active": true
+  },
+  "manager@example.com": {
+    "username": "manager",
+    "password_hash": "9af15b336e6a9619928537df30b2e6a2376569fcf9d7e773eccede65606529a0",
+    "auth_level": 3,
+    "is_active": true
+  }
+}
