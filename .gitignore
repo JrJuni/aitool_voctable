@@ -235,3 +235,6 @@ projects/voc_table/models/*.safetensors
 projects/voc_table/config.yaml
 projects/voc_table/.env.local
 projects/voc_table/.env.production
+
+# models
+models/

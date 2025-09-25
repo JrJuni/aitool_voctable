@@ -1,0 +1,311 @@
+[제목] AI VOC 시스템 MVP 구축 계획표 (TXT)
+
+[목표]
+
+내부/외부 겸용 최소 기능 제품(MVP) 1차 완성
+
+Streamlit UI + FastAPI API + MySQL(SQLAlchemy, 동기) + Alembic + Docker
+
+엑셀 가변 스키마 I/O, 기본 CRUD/검색/필터, AI 요약 초안 생성/확정 플로우
+
+RBAC 권한 레벨(0~5), 감사로그(생성/수정/삭제) 적용
+
+[범위(MVP)]
+
+유저 테이블(사내 담당자 로그인/RBAC 0~5)
+
+컨택 테이블(상대 회사/담당자)
+
+VOC 숏리스트(날짜, 상대기업 FK, 담당자 FK, 문의내용, 프로젝트 FK, action item, due date, status, priority)
+
+프로젝트 상세(분야, 타겟 앱, 요구 AI 모델/성능/전력/크기/가격/기타/경쟁제품/결과/원인분석)
+
+엑셀 가변 내보내기/가져오기(롱리스트, 원시 테이블, 간단 통계)
+
+AI 요약: 사용자가 본문 입력 → 자동 요약 초안 → 사용자 확인 후 저장
+
+감사로그: 생성기본 / 수정·삭제는 관리자(레벨≥4)만, 삭제추적(소프트 삭제)
+
+[규모 가정]
+
+동시 사용자: ~3명
+
+등록 사용자: 20~30명
+
+데이터량: ≤ 1만 건
+
+[아키텍처/스택]
+
+Backend: FastAPI, SQLAlchemy 2.x + PyMySQL(동기), Alembic
+
+Frontend: Streamlit (내부툴)
+
+Infra: Docker(+docker-compose), .env + configs/config.yaml
+
+Lib: pandas, openpyxl, pydantic, httpx
+
+Logging: Python logging + 일 단위 파일 logs/log_YYYYMMDD.txt
+
+Auth(외부망 대응): OAuth2 Password Flow + JWT(최소안), 비밀번호 해시(passlib), CORS 제한, Nginx 리버스 프록시(추가 옵션)
+
+선택 옵션(후속): Google/Microsoft OAuth SSO
+
+[역할/권한 레벨]
+
+0: 가입신청(대기, 조회 불가)
+
+1: 기본권한(본인 생성 데이터 조회/생성), 메타 데이터 조회 가능
+
+2: 영업/전략팀(대부분 조회/생성), 메타 데이터 조회 가능, 본인 생성 데이터 수정/삭제 가능
+
+3: 임원급/부서 내 관리자(부서 범위 수정 가능), 메타 데이터 조회 가능, 부서 범위 생성 데이터 수정/삭제 가능
+
+4: 최고 관리자(조직 전체 수정/삭제 추적 가능)
+
+5: 대표님(전권, RBAC/감사 정책 변경 가능)
+
+[데이터 모델(초안 컬럼)]
+
+user(id, email, name, auth_level, password_hash, is_active, created_at, updated_at)
+
+company(id, name, domain, revenue, employee, nation, created_at, updated_at)
+
+contact(id, company_id FK, name, title, email, phone, note, created_at, updated_at)
+
+project(id, company_id FK, name, field, target_app, ai_model, perf, power, size, price, requirements, competitors, result, why, created_at, updated_at)
+
+voc(id, date, company_id FK, contact_id FK, project_id FK, content, action_item, due_date, status, priority, created_at, updated_at, deleted_at NULL)
+
+audit_log(id, actor_user_id, action(create/update/delete/login/export/import), table_name, row_id, before_json, after_json, ip, ua, created_at)
+
+[핵심 API(초안)]
+
+Auth: POST /auth/login (JWT), GET /auth/me
+
+Users: GET/POST/PATCH /users (RBAC≥4만 수정/삭제)
+
+Company/Contact/Project/VOC: CRUD + 목록 검색(기간/상태/담당/회사/프로젝트/우선순위)
+
+Excel: GET /export.xlsx?type=voc|project|contact&view=raw|longlist|stats, POST /import (자동 매핑 가이드)
+
+AI: POST /ai/summarize (본문→요약초안), POST /voc/{id}/summary/confirm
+
+[Streamlit 화면(MVP)]
+
+로그인/로그아웃(토큰 저장)
+
+탭: VOC, Project, Contact, Company, Excel I/O, Admin(권한별 노출)
+
+VOC 탭: 등록 폼(본문→요약 초안 버튼→확정 저장), 필터/검색 테이블, 엑셀 버튼
+
+Excel 탭: 내보내기(뷰 선택), 가져오기(매핑 미리보기/검증 리포트)
+
+Admin 탭: 사용자/RBAC, 감사로그 표
+
+[일정(제안: 10일, 평일 기준)]
+D1: 프로젝트 부트스트랩
+
+리포/폴더 구성, requirements.txt, .env 템플릿, Docker 베이스(Dockerfile, docker-compose.yml)
+
+FastAPI/DB 연결, Alembic 초기화, 로깅 설정, 기본 헬스체크
+산출물: 초기 리포, 빌드/기동 성공, /health OK
+
+D2: 모델/스키마/마이그레이션
+
+모델/인덱스 설계 반영, Alembic revision 생성/적용
+
+기본 CRUD(Company/Contact/Project/VOC) 스켈레톤
+산출물: DB 스키마 확정, 기본 CRUD 동작
+
+D3: 인증/권한(RBAC) 기본
+
+/auth/login(JWT), /auth/me
+
+role_level 기반 디펜던시, 엔드포인트 가드
+
+비밀번호 해시/검증(passlib), 토큰 만료/갱신
+산출물: 로그인→보호 API 접근 제어
+
+D4: VOC 목록/검색/정렬/페이지네이션
+
+filters.py: 기간/회사/상태/담당/우선순위
+
+기본 정렬(created_at desc), limit/offset
+
+목록 응답 성능 확인(1만건 가정)
+산출물: 실사용 가능한 VOC 리스트
+
+D5: 엑셀 Export/Import v1
+
+export: raw/longlist/stats 3가지 뷰 스위치
+
+import: 헤더 자동매핑(유사도/사전), 검증 리포트(JSON/엑셀)
+
+메모리 안전(배치 커밋: 500행)
+산출물: 샘플 파일 왕복, 에러 리포트
+
+D6: AI 요약 초안 플로우
+
+/ai/summarize 규칙기반 또는 경량 모델 스텁(로컬)
+
+Streamlit: “요약 생성→확정 저장” UI
+
+감사로그: 요약 생성/확정 기록
+산출물: 본문→요약→확정 저장
+
+D7: 감사로그/관리자 기능
+
+audit_log 기록 미들웨어/데코레이터
+
+Admin 탭: 사용자/역할 관리, 감사로그 테이블
+
+삭제는 soft delete(복구용), hard delete는 레벨≥5
+산출물: 변경 추적/관리 화면
+
+D8: QA/테스트/시드 데이터
+
+단위/통합 테스트(주요 경계/권한/엑셀/요약)
+
+샘플 데이터 스크립트
+
+부하 스모크(동시 3, 1만건)
+산출물: 테스트 통과, 데모 준비
+
+D9: 보안/배포 하드닝
+
+CORS 제한, HTTPS 전제(리버스 프록시 Nginx)
+
+JWT 시크릿/토큰 수명, 비밀번호 정책
+
+Docker 이미징/compose, .env.production, 헬스체크
+산출물: docker-compose up 으로 기동
+
+D10: 문서화/운영 가이드
+
+README: 기동/마이그레이션/백업/롤백
+
+운영 체크리스트(백업 주기, 로그 로테이션)
+
+변경관리(알렘빅 규칙)
+산출물: MVP 릴리스 노트
+
+[작업 세부(체크리스트)]
+
+공통
+
+[.env] DB_USER/DB_PASS/DB_HOST/DB_PORT/DB_NAME, JWT_SECRET, TOKEN_EXPIRE_MIN
+
+[logs] 일 단위 파일 핸들러, 요청ID/사용자ID 포함
+
+백엔드
+
+models.py: 공통 created_at/updated_at/soft delete
+
+인덱스: voc(created_at), voc(company_id, created_at), voc(status, priority, created_at)
+
+filters.py: 파라미터 검증(pydantic) + where 빌더
+
+excel_io.py: export(view=raw|longlist|stats), import(매핑/검증/배치)
+
+ai_utils.py: 요약 스텁(예: 문장 2~3줄, 금칙어 필터)
+
+audit 데코레이터: before/after 스냅샷(JSON 직렬화)
+
+프런트(Streamlit)
+
+로그인 폼 → 토큰 세션 저장
+
+VOC 탭: 등록 폼 + “요약 생성/확정” 버튼
+
+목록 테이블: 필터/페이지, 다운로드 버튼
+
+Excel 탭: 가져오기(미리보기), 내보내기(뷰 선택)
+
+Admin 탭: 사용자/역할, 감사로그
+
+[수용 기준(AC)]
+
+로그인 성공/실패 처리, RBAC로 보호된 API 접근 제어
+
+VOC 등록 시: 본문→요약 초안→확정 저장 동작, 감사로그 기록
+
+VOC 목록 필터: 기간/회사/상태/우선순위 조합 필터 결과가 일관
+
+엑셀 내보내기: 3가지 뷰 파일 다운로드 성공, UTF-8 컬럼 보존
+
+엑셀 가져오기: 헤더 가변 매핑 안내, 5000행 테스트에서 실패율 0%, 배치 커밋 동작
+
+감사로그: 생성/수정/삭제에 대해 actor/전후/시간 기록
+
+도커: docker-compose up 후 API 8000/Streamlit 8501 정상 기동
+
+[보안 권장안(외부망 사용)]
+
+Nginx 리버스 프록시 + Let’s Encrypt TLS
+
+FastAPI: OAuth2 Password + JWT(HS256), 비밀번호 해시(bcrypt), 실패 횟수 제한(락아웃)
+
+CORS: 허용 도메인 화이트리스트
+
+관리자(레벨≥4)만 엑셀 Import/삭제 가능
+
+비밀키/DB 비밀번호는 .env.production + OS 비밀 저장소
+
+[배포/운영]
+
+docker-compose.yml: api, ui, db(mysql:8), nginx(reverse proxy)
+
+백업: mysqldump 일 1회 + 주간 보관, /logs 로테이션 14일
+
+마이그레이션: 릴리스 전 alembic upgrade head, 롤백 alembic downgrade -1
+
+헬스체크: /health, /metrics(선택)
+
+[리스크/대응]
+
+동기 DB 병목: 동시성 증가 시 접속 풀/타임아웃 조정, 추후 async 전환 옵션
+
+대용량 엑셀 메모리: 배치 처리/스트리밍, 행수 제한/경고
+
+가변 스키마 혼선: “내보내기 뷰” 명세 고정, Import 매핑 템플릿 제공
+
+권한 오남용: 기본 권한 최소화(레벨1), 위험 작업은 레벨4+ 이중확인
+
+[샘플 명령]
+
+개발 기동: pip install -r requirements.txt && uvicorn app.main:app --reload --port 8000
+
+마이그레이션: alembic revision --autogenerate -m "init" && alembic upgrade head
+
+프런트: streamlit run frontend/streamlit_app.py --server.port 8501
+
+도커: docker-compose up --build
+
+[로그 규칙]
+
+파일: logs/log_YYYYMMDD.txt
+
+포맷: ts | level | req_id | user_id | method path status ms | msg
+
+[구조]
+voc-table/
+├─ backend/
+│  ├─ app/
+│  │  ├─ main.py                # FastAPI 엔트리
+│  │  ├─ db.py                  # 엔진/세션/세션 context
+│  │  ├─ models.py              # SQLAlchemy 모델
+│  │  ├─ schemas.py             # Pydantic 스키마
+│  │  ├─ crud.py                # DB 접근 함수(단계적)
+│  │  ├─ filters.py             # 목록/검색 쿼리 빌더
+│  │  ├─ excel_io.py            # import/export 유틸(청크)
+│  │  ├─ ai_utils.py            # (선택) 감정/요약 스텁
+│  │  └─ logging_conf.py        # 로깅 설정(일 단위 파일)
+│  ├─ alembic.ini
+│  └─ alembic/
+├─ frontend/
+│  └─ streamlit_app.py          # 내부용 화면
+├─ configs/
+│  └─ config.yaml               # 앱 설정(페이지 크기 등)
+├─ tests/
+   ├─ test_api_basic.py
+   └─ test_excel_import.py

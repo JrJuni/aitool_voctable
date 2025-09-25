@@ -1,0 +1,53 @@
+프로젝트 : 고객 VOC 관리용 DB 파이프라인 설계 및 구현
+
+# Overview
+- 전체 서비스 기획 초안 생성 (다소 러프)
+- 스키마 생성 도구(schemas.py) 설계, 기존 CRM용 DB 참고 > 대격변
+
+# Detail
+1. 기본
+- SQLite3 > MySQL 변경: User가 최소 7명이며 추가될 가능성이 높아 SQL 툴 변경
+- 기타 조합: MySQL, FastAPI, SQLAlchemy, PyMySQL, Alembic, Streamlit
+- src 폴더 > backend, frontend 구분: 전문화된 구조
+
+2. 기획 및 실행
+- 요구사항 prompts 폴더의 voc_requirements.txt로 정리
+- Cursor AI에 참조하게 하여 빈 파일, 폴더 생성
+- schemas.py 생성, 주요 스키마 설계
+- users table 관련 기능 구현(로그인, 권한조정, 비활성화/활성화, 비밀번호 변경)
+
+3. 권한 시스템 설계 및 구현
+- RBAC 권한 레벨 시스템 (0-5) 설계
+  * 0: 가입신청(대기), 1: 기본권한, 2: 영업/전략팀, 3: 임원급/부서관리자
+  * 4: 최고관리자, 5: 대표님(고정), HR 관리자 계정(고정)
+- 계층적 권한 관리: 각 레벨이 자신보다 낮은 레벨만 권한 레벨 조정 가능
+- 회원가입 시스템: 누구나 가입 가능 → 레벨 0 (승인 대기)
+- 관리자 승인 시스템: 레벨 3+가 가입 승인/거부 가능
+
+4. 보안 및 관리 기능
+- HR 관리자 계정: admin@mobilint.com / 0000 (고정 계정)
+- 비밀번호 초기화 기능: 레벨 4+가 다른 사용자 비밀번호 초기화 가능
+- 개인정보 수정: 모든 사용자가 본인 정보 수정 가능
+- 소프트 삭제: is_active=False로 사용자 비활성화
+- 감사 로그: 모든 사용자 관리 작업 로깅
+
+5. API 엔드포인트 구현
+- 인증: /auth/login, /auth/me, /auth/logout
+- 사용자 관리: /users/register, /users/, /users/{id}/approve, /users/{id}/reject
+- 비밀번호 관리: /users/{id}/reset-password, /users/{id}/reset-password-admin
+- 개인정보: /users/me, /users/me/admin-profile
+- 상태 관리: /users/{id}/activate, /users/{id}/deactivate
+- HR 설정: /admin/setup-default-hr
+
+6. 파일 구조 및 설정
+- main.py: FastAPI 엔트리포인트 (910줄)
+- crud.py: 데이터베이스 작업 함수
+- logging_conf.py: 로깅 설정 및 보안 이벤트 로깅
+- schemas.py: Pydantic 스키마 (한글 주석 포함)
+- requirements.txt: ROS 라이브러리 제거, VOC 시스템 핵심 라이브러리만 유지
+- AI/ML 라이브러리 포함: torch, transformers, numpy 등 (확장성 고려)
+
+# Feedback
+- 로그인 시스템 및 권한 관리에 있어 디테일이 부족했음 > 토큰 낭비
+- voc_requirements.txt는 큰 그림으로 생각하고 디테일한 부분은 조금 더 구체화하여 LLM 입력해야 낭비 줄임
+- 보안 관련 지식이 없어 검증 불가, 스터디 필요
