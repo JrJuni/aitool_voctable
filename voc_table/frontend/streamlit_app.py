@@ -7,9 +7,30 @@ import json
 import os
 import tempfile
 from typing import Optional, Dict, Any
+import streamlit_cookies_manager as cookies_manager
 
 # 백엔드 API URL 설정
 API_BASE_URL = os.getenv("API_BASE_URL", "http://172.16.5.75:8000")
+
+# 쿠키 매니저 초기화 (세션 쿠키 지원을 위해 CookieManager를 직접 확장)
+class SessionCookieManager(cookies_manager.EncryptedCookieManager):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def set_session_cookie(self, key: str, value: str):
+        """브라우저 세션 동안만 유지되는 쿠키 설정"""
+        # 내부 CookieManager의 queue에 직접 접근하여 expires_at을 None으로 설정
+        encrypted_value = self._encrypt(value.encode('utf-8')).decode('utf-8')
+        self._cookie_manager._queue[key] = dict(
+            value=encrypted_value,
+            expires_at=None,  # 세션 쿠키로 설정
+            path=self._cookie_manager._path,
+        )
+
+cookies = SessionCookieManager(
+    prefix="voc_auth_",
+    password=os.getenv("COOKIE_SECRET_KEY", "your-secret-key-change-in-production")  # 환경변수에서 읽기
+)
 
 # API 호출 헬퍼 함수들
 def get_auth_headers():
@@ -17,6 +38,104 @@ def get_auth_headers():
     if 'session_token' in st.session_state:
         return {"Authorization": f"Bearer {st.session_state.session_token}"}
     return {}
+
+def get_cookie_auth_headers():
+    """쿠키 기반 인증 헤더 생성"""
+    return {"Content-Type": "application/x-www-form-urlencoded"}
+
+def api_login_with_cookie(email: str, password: str):
+    """쿠키 기반 로그인 API 호출"""
+    try:
+        # Form data로 전송
+        data = {
+            "username": email,  # OAuth2PasswordRequestForm은 username 필드를 사용
+            "password": password
+        }
+        
+        response = requests.post(
+            f"{API_BASE_URL}/auth/login-cookie",
+            data=data,
+            headers=get_cookie_auth_headers(),
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            # 쿠키를 세션 쿠키로 저장 (브라우저 종료시 자동 삭제)
+            if 'access_token' in result:
+                # 세션 쿠키로 설정 (브라우저 종료시 자동 삭제됨)
+                cookies.set_session_cookie('auth_token', result['access_token'])
+                cookies.set_session_cookie('user_email', email)
+                cookies.save()
+            return result
+        else:
+            return None
+    except Exception as e:
+        return None
+
+def api_verify_cookie_auth():
+    """쿠키 기반 인증 검증 API 호출"""
+    try:
+        # 로컬 쿠키에서 토큰 가져오기
+        auth_token = cookies.get('auth_token')
+        if not auth_token:
+            return None
+            
+        # 토큰을 헤더에 포함하여 검증 요청
+        headers = {"Authorization": f"Bearer {auth_token}"}
+        response = requests.get(
+            f"{API_BASE_URL}/auth/me",
+            headers=headers,
+            timeout=5
+        )
+        
+        if response.status_code == 200:
+            return response.json()
+        else:
+            # 토큰이 유효하지 않으면 쿠키 삭제
+            cookies.delete('auth_token')
+            cookies.save()
+            return None
+    except Exception as e:
+        return None
+
+def api_logout_with_cookie():
+    """쿠키 기반 로그아웃 API 호출"""
+    try:
+        # 서버에 로그아웃 요청 (쿠키 삭제 전에 먼저)
+        auth_token = cookies.get('auth_token')
+        if auth_token:
+            headers = {"Authorization": f"Bearer {auth_token}"}
+            try:
+                requests.post(
+                    f"{API_BASE_URL}/auth/logout",
+                    headers=headers,
+                    timeout=5
+                )
+            except:
+                pass  # 네트워크 오류 시 무시하고 로컬 정리 진행
+
+        # 모든 관련 쿠키 완전 삭제
+        try:
+            cookies.delete('auth_token')
+            cookies.delete('user_email')
+            # 암호화 키 매개변수 쿠키도 삭제하여 완전 초기화
+            cookies.delete('EncryptedCookieManager.key_params')
+            cookies.save()
+        except:
+            pass
+
+        # 세션 상태도 완전 초기화
+        if 'session_token' in st.session_state:
+            del st.session_state['session_token']
+        if 'current_user' in st.session_state:
+            del st.session_state['current_user']
+        if 'user_level' in st.session_state:
+            del st.session_state['user_level']
+
+        return True
+    except Exception as e:
+        return False
 
 def api_get(endpoint):
     """GET API 호출"""
@@ -143,21 +262,31 @@ def validate_session_token(token: str, email: str) -> bool:
         return False
 
 def check_session_validity():
-    """현재 세션 상태 확인 및 자동 로그인"""
-    # 이미 로그인 상태라면 토큰 검증
+    """현재 세션 상태 확인 및 자동 로그인 - 쿠키 우선 검사"""
+    # 이미 로그인 상태라면 유효성 검증
     if st.session_state.get('logged_in', False):
+        # 1. 먼저 쿠키 기반 인증 검증 (더 신뢰성 있음)
+        user_info = api_verify_cookie_auth()
+        if user_info:
+            # 쿠키가 유효하면 세션 상태 갱신
+            st.session_state.user_email = user_info.get('email', st.session_state.get('user_email', ''))
+            st.session_state.username = user_info.get('username', st.session_state.get('username', ''))
+            st.session_state.auth_level = user_info.get('auth_level', st.session_state.get('auth_level', 0))
+            st.session_state.profile_department = user_info.get('department', st.session_state.get('profile_department', '전략팀'))
+            return True
+
+        # 2. 쿠키가 없거나 무효한 경우, 기존 세션 토큰 검사
         token = st.session_state.get('session_token')
         email = st.session_state.get('user_email')
 
         if token and email and validate_session_token(token, email):
-            # 유효한 세션
             return True
-        else:
-            # 세션 만료, 로그아웃 처리
-            for key in ['logged_in', 'user_email', 'username', 'auth_level', 'session_token', 'profile_department']:
-                if key in st.session_state:
-                    del st.session_state[key]
-            return False
+
+        # 3. 모든 인증 방법 실패 시 로그아웃 처리
+        for key in ['logged_in', 'user_email', 'username', 'auth_level', 'session_token', 'profile_department']:
+            if key in st.session_state:
+                del st.session_state[key]
+        return False
     return False
 
 def save_session_to_localStorage():
@@ -241,8 +370,34 @@ def clear_localStorage():
         except Exception:
             pass
 
+def initialize_session_from_cookie():
+    """페이지 로드 시 쿠키에서 세션 복원 시도"""
+    # 이미 로그인된 상태라면 스킵
+    if st.session_state.get('logged_in', False):
+        return False
+
+    # 쿠키 기반 인증 검증
+    user_info = api_verify_cookie_auth()
+    if user_info:
+        # 세션 복원
+        st.session_state.logged_in = True
+        st.session_state.user_email = user_info.get('email', '')
+        st.session_state.username = user_info.get('username', '')
+        st.session_state.auth_level = user_info.get('auth_level', 0)
+        st.session_state.profile_department = user_info.get('department', '전략팀')
+
+        # 세션 토큰도 생성 (기존 로직과의 호환성을 위해)
+        token = generate_session_token(st.session_state.user_email)
+        st.session_state.session_token = token
+
+        # 파일 기반 세션도 저장 (백업용)
+        save_session_to_localStorage()
+
+        return True
+    return False
+
 def initialize_session_from_localStorage():
-    """페이지 로드 시 파일에서 세션 복원 시도"""
+    """페이지 로드 시 파일에서 세션 복원 시도 (기존 방식)"""
     if 'session_restored' not in st.session_state and not st.session_state.get('logged_in', False):
         st.session_state.session_restored = True
 
@@ -501,33 +656,58 @@ def login_page():
             
             if submitted:
                 if email and password:
-                    # 비밀번호 재설정 필요 확인
-                    if check_password_reset_needed(email, password):
-                        st.session_state.user_email = email
-                        st.session_state.password_reset_needed = True
-                        st.rerun()
-                        return
-                    
-                    user_info = authenticate_user(email, password)
-                    if user_info and user_info["authenticated"]:
-                        # 세션 상태 설정
-                        st.session_state.logged_in = True
-                        st.session_state.user_email = email
-                        st.session_state.username = user_info["username"]
-                        st.session_state.auth_level = user_info["auth_level"]
-                        st.session_state.profile_department = user_info.get("department", "전략팀")
-                        
-                        # 세션 토큰 생성
-                        token = generate_session_token(email)
-                        st.session_state.session_token = token
-                        
-                        # 세션을 파일에 저장
-                        save_session_to_localStorage()
-                        
-                        st.success("로그인 성공!")
-                        st.rerun()
+                    # 쿠키 기반 로그인 시도
+                    login_result = api_login_with_cookie(email, password)
+                    if login_result:
+                        # 쿠키 기반 인증으로 사용자 정보 조회
+                        user_info = api_verify_cookie_auth()
+                        if user_info:
+                            # 세션 상태 설정
+                            st.session_state.logged_in = True
+                            st.session_state.user_email = user_info.get('email', email)
+                            st.session_state.username = user_info.get('username', '')
+                            st.session_state.auth_level = user_info.get('auth_level', 0)
+                            st.session_state.profile_department = user_info.get('department', '전략팀')
+                            
+                            # 세션 토큰 생성 (기존 로직과의 호환성을 위해)
+                            token = generate_session_token(st.session_state.user_email)
+                            st.session_state.session_token = token
+                            
+                            # 세션을 파일에 저장 (백업용)
+                            save_session_to_localStorage()
+                            
+                            st.success("로그인 성공!")
+                            st.rerun()
+                        else:
+                            st.error("사용자 정보를 가져올 수 없습니다.")
                     else:
-                        st.error("잘못된 비밀번호입니다.")
+                        # 쿠키 기반 로그인 실패 시 기존 방식으로 폴백
+                        if check_password_reset_needed(email, password):
+                            st.session_state.user_email = email
+                            st.session_state.password_reset_needed = True
+                            st.rerun()
+                            return
+                        
+                        user_info = authenticate_user(email, password)
+                        if user_info and user_info["authenticated"]:
+                            # 세션 상태 설정
+                            st.session_state.logged_in = True
+                            st.session_state.user_email = email
+                            st.session_state.username = user_info["username"]
+                            st.session_state.auth_level = user_info["auth_level"]
+                            st.session_state.profile_department = user_info.get("department", "전략팀")
+                            
+                            # 세션 토큰 생성
+                            token = generate_session_token(email)
+                            st.session_state.session_token = token
+                            
+                            # 세션을 파일에 저장
+                            save_session_to_localStorage()
+                            
+                            st.success("로그인 성공!")
+                            st.rerun()
+                        else:
+                            st.error("잘못된 비밀번호입니다.")
                 else:
                     st.error("이메일과 비밀번호를 입력하세요.")
     
@@ -599,6 +779,9 @@ def voc_table_page():
         lo_spacer, lo_btn = st.columns([0.35, 0.65])
         with lo_btn:
             if st.button("🚪 로그아웃"):
+                # 쿠키 기반 로그아웃 시도
+                api_logout_with_cookie()
+                
                 # localStorage 세션 삭제
                 clear_localStorage()
                 
@@ -743,7 +926,7 @@ def _render_voc_tab():
         # 편집된 데이터를 세션 상태에 저장
         edited_df = st.data_editor(
             df,
-            use_container_width=True,
+            width="stretch",
             column_config={
                 "ID": st.column_config.NumberColumn("ID", width=42, disabled=True),
                 "날짜": st.column_config.TextColumn("날짜", width=66),
@@ -766,7 +949,7 @@ def _render_voc_tab():
     else:
         st.dataframe(
             df,
-            use_container_width=True,
+            width="stretch",
             column_config={
                 "ID": st.column_config.NumberColumn("ID", width=42),
                 "날짜": st.column_config.TextColumn("날짜", width=66),
@@ -811,7 +994,7 @@ def _render_company_tab():
         # 편집된 데이터를 세션 상태에 저장
         edited_df = st.data_editor(
             df,
-            use_container_width=True,
+            width="stretch",
             column_config={
                 "ID": st.column_config.NumberColumn("ID", width=42, disabled=True),
                 "회사명": st.column_config.TextColumn("회사명", width=200),
@@ -833,7 +1016,7 @@ def _render_company_tab():
     else:
         st.dataframe(
             df,
-            use_container_width=True,
+            width="stretch",
             column_config={
                 "ID": st.column_config.NumberColumn("ID", width=42),
                 "회사명": st.column_config.TextColumn("회사명", width=200),
@@ -876,7 +1059,7 @@ def _render_contact_tab():
         # 편집된 데이터를 세션 상태에 저장
         edited_df = st.data_editor(
             df,
-            use_container_width=True,
+            width="stretch",
             column_config={
                 "ID": st.column_config.NumberColumn("ID", width=42, disabled=True),
                 "이름": st.column_config.TextColumn("이름", width=100),
@@ -899,7 +1082,7 @@ def _render_contact_tab():
     else:
         st.dataframe(
             df,
-            use_container_width=True,
+            width="stretch",
             column_config={
                 "ID": st.column_config.NumberColumn("ID", width=42),
                 "이름": st.column_config.TextColumn("이름", width=100),
@@ -944,7 +1127,7 @@ def _render_project_tab():
         # 편집된 데이터를 세션 상태에 저장
         edited_df = st.data_editor(
             df,
-            use_container_width=True,
+            width="stretch",
             column_config={
                 "ID": st.column_config.NumberColumn("ID", width=42, disabled=True),
                 "프로젝트명": st.column_config.TextColumn("프로젝트명", width=200),
@@ -970,7 +1153,7 @@ def _render_project_tab():
     else:
         st.dataframe(
             df,
-            use_container_width=True,
+            width="stretch",
             column_config={
                 "ID": st.column_config.NumberColumn("ID", width=42),
                 "프로젝트명": st.column_config.TextColumn("프로젝트명", width=200),
@@ -1769,32 +1952,28 @@ def main():
         layout="wide"
     )
     
+    # 쿠키 매니저 초기화 대기
+    if not cookies.ready():
+        st.info("🔄 쿠키 매니저 초기화 중...")
+        st.stop()
+    
     # 세션 상태 초기화
     if 'logged_in' not in st.session_state:
         st.session_state.logged_in = False
     if 'password_reset_needed' not in st.session_state:
         st.session_state.password_reset_needed = False
     
-    # 세션 복원 로직 강화
+    # 세션 복원 로직 강화 - 새로고침에도 로그인 상태 유지
     if not st.session_state.logged_in:
-        # 1. 파일에서 세션 복원 시도
+        # 1. 쿠키 기반 세션 복원 시도 (최우선)
+        if initialize_session_from_cookie():
+            st.rerun()
+            return
+
+        # 2. 파일에서 세션 복원 시도 (쿠키 실패 시 백업)
         if initialize_session_from_localStorage():
             st.rerun()
             return
-        
-        # 2. 세션 토큰이 있는 경우 유효성 검사
-        if 'session_token' in st.session_state and 'user_email' in st.session_state:
-            if validate_session_token(st.session_state.session_token, st.session_state.user_email):
-                # 사용자 정보 다시 조회하여 세션 상태 복원
-                temp_users = get_temp_users()
-                user = temp_users.get(st.session_state.user_email)
-                if user and user['is_active'] and user['auth_level'] > 0:
-                    st.session_state.logged_in = True
-                    st.session_state.username = user['username']
-                    st.session_state.auth_level = user['auth_level']
-                    st.session_state.profile_department = user.get('department', '전략팀')
-                    st.rerun()
-                    return
     
     # 로그인된 상태에서 세션 유효성 검사
     if st.session_state.logged_in:

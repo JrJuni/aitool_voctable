@@ -13,7 +13,12 @@
       "mcp__playwright__browser_wait_for",
       "mcp__playwright__browser_click",
       "Bash(python -m streamlit run:*)",
-      "mcp__sequential-thinking__sequentialthinking"
+      "mcp__sequential-thinking__sequentialthinking",
+      "Bash(streamlit run:*)",
+      "Bash(python:*)",
+      "mcp__brave-search__brave_web_search",
+      "WebFetch(domain:pypi.org)",
+      "Bash(rm:*)"
     ],
     "deny": [],
     "ask": []

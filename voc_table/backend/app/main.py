@@ -1,5 +1,5 @@
 # FastAPI 엔트리 포인트
-from fastapi import FastAPI, Depends, HTTPException, status, Request
+from fastapi import FastAPI, Depends, HTTPException, status, Request, Response
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 import jwt
 import os
+import secrets
 
 from . import crud, schemas
 from .db import get_db
@@ -165,6 +166,105 @@ async def logout(
     log_logout(current_user.id, current_user.email, ip)
     
     return {"message": "Successfully logged out"}
+
+# =============================================================================
+# 쿠키 기반 인증 엔드포인트
+# =============================================================================
+
+@app.post("/auth/login-cookie", response_model=schemas.Token)
+async def login_with_cookie(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db),
+    request: Request = None,
+    response: Response = None
+):
+    """쿠키 기반 사용자 로그인"""
+    # 클라이언트 정보 추출
+    ip = get_client_ip(request) if request else None
+    user_agent = request.headers.get("User-Agent") if request else None
+    
+    # 사용자 인증
+    user = crud.authenticate_user(db, form_data.username, form_data.password)
+    
+    if not user:
+        log_login_failure(form_data.username, "Invalid credentials", ip, user_agent)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # JWT 토큰 생성
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": str(user.id)}, expires_delta=access_token_expires
+    )
+    
+    # 쿠키 설정 (HttpOnly, Secure, SameSite)
+    response.set_cookie(
+        key="auth_token",
+        value=access_token,
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,  # 초 단위
+        httponly=True,
+        secure=False,  # HTTPS 환경에서는 True로 설정
+        samesite="lax"
+    )
+    
+    # 로그인 성공 로그
+    log_login_success(user.id, user.email, ip, user_agent)
+    
+    return {"access_token": access_token, "token_type": "bearer"}
+
+@app.post("/auth/logout-cookie")
+async def logout_with_cookie(
+    response: Response = None,
+    request: Request = None
+):
+    """쿠키 기반 사용자 로그아웃"""
+    # 쿠키 삭제
+    response.delete_cookie(key="auth_token")
+    
+    return {"message": "Successfully logged out"}
+
+@app.get("/auth/verify-cookie", response_model=schemas.User)
+async def verify_cookie_auth(
+    request: Request = None,
+    db: Session = Depends(get_db)
+):
+    """쿠키 기반 인증 검증"""
+    # 쿠키에서 토큰 추출
+    auth_token = request.cookies.get("auth_token")
+    
+    if not auth_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="No authentication cookie found"
+        )
+    
+    try:
+        # JWT 토큰 검증
+        payload = jwt.decode(auth_token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: int = payload.get("sub")
+        if user_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token"
+            )
+    except jwt.PyJWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token"
+        )
+    
+    # 사용자 정보 조회
+    user = crud.get_user_by_id(db, user_id=user_id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found"
+        )
+    
+    return user
 
 # =============================================================================
 # 사용자 관리 엔드포인트
