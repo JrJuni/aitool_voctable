@@ -358,9 +358,9 @@ def password_reset_page():
                     st.session_state.session_token = token
                     # URL 파라미터는 사용하지 않고 세션 상태만 사용
                     
-                    st.success("비밀번호가 성공적으로 변경되었습니다!")
-                    # localStorage에 세션 저장
+                    # localStorage에 세션 저장 (rerun 전에)
                     save_session_to_localStorage()
+                    st.success("비밀번호가 성공적으로 변경되었습니다!")
                     st.rerun()
                 else:
                     st.error("비밀번호 변경에 실패했습니다.")
@@ -403,9 +403,9 @@ def login_page():
                         st.session_state.session_token = token
                         # URL 파라미터는 사용하지 않고 세션 상태만 사용
                         
-                        st.success("로그인 성공!")
-                        # localStorage에 세션 저장
+                        # localStorage에 세션 저장 (rerun 전에)
                         save_session_to_localStorage()
+                        st.success("로그인 성공!")
                         st.rerun()
                     else:
                         st.error("잘못된 비밀번호입니다.")
@@ -1625,16 +1625,119 @@ def _render_user_management_modal():
                 st.rerun()
 
 def save_session_to_localStorage():
-    """세션 저장 (빈 함수 - 에러 방지)"""
-    pass
+    """세션을 로컬 파일에 저장"""
+    if st.session_state.get('logged_in', False):
+        session_data = {
+            'user_email': st.session_state.get('user_email', ''),
+            'username': st.session_state.get('username', ''),
+            'auth_level': st.session_state.get('auth_level', 0),
+            'session_token': st.session_state.get('session_token', ''),
+            'profile_department': st.session_state.get('profile_department', '전략팀'),
+            'timestamp': time.time()
+        }
+
+        session_dir = os.path.join(BASE_DIR, ".sessions")
+        os.makedirs(session_dir, exist_ok=True)
+
+        # 사용자별 세션 파일
+        session_file = os.path.join(session_dir, f"session_{hashlib.md5(session_data['user_email'].encode()).hexdigest()}.json")
+
+        try:
+            with open(session_file, 'w', encoding='utf-8') as f:
+                json.dump(session_data, f, ensure_ascii=False, indent=2)
+            # 디버깅: 성공 메시지 표시
+            st.success(f"세션 저장됨: {session_file}")
+        except Exception as e:
+            # 디버깅: 에러 메시지 표시
+            st.error(f"세션 저장 실패: {str(e)}")
 
 def load_session_from_localStorage():
-    """세션 로드 (빈 함수 - 에러 방지)"""
-    pass
+    """로컬 파일에서 최신 세션 로드"""
+    session_dir = os.path.join(BASE_DIR, ".sessions")
+    if not os.path.exists(session_dir):
+        return None
+
+    try:
+        # 모든 세션 파일 검색
+        session_files = [f for f in os.listdir(session_dir) if f.startswith("session_") and f.endswith(".json")]
+
+        if not session_files:
+            return None
+
+        # 가장 최근 세션 파일 찾기
+        latest_session = None
+        latest_time = 0
+
+        for session_file in session_files:
+            file_path = os.path.join(session_dir, session_file)
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    session_data = json.load(f)
+
+                # 24시간 이내 세션만 유효
+                session_time = session_data.get('timestamp', 0)
+                if time.time() - session_time < 24 * 60 * 60:  # 24시간
+                    if session_time > latest_time:
+                        latest_time = session_time
+                        latest_session = session_data
+                else:
+                    # 만료된 세션 파일 삭제
+                    os.remove(file_path)
+            except Exception:
+                # 손상된 파일 삭제
+                try:
+                    os.remove(file_path)
+                except Exception:
+                    pass
+
+        return latest_session
+    except Exception:
+        return None
 
 def clear_localStorage():
-    """세션 클리어 (빈 함수 - 에러 방지)"""
-    pass
+    """로컬 세션 파일 제거"""
+    session_dir = os.path.join(BASE_DIR, ".sessions")
+    if os.path.exists(session_dir):
+        try:
+            # 현재 사용자의 세션 파일만 삭제
+            if st.session_state.get('user_email'):
+                email_hash = hashlib.md5(st.session_state['user_email'].encode()).hexdigest()
+                session_file = os.path.join(session_dir, f"session_{email_hash}.json")
+                if os.path.exists(session_file):
+                    os.remove(session_file)
+        except Exception:
+            pass
+
+def initialize_session_from_localStorage():
+    """페이지 로드 시 파일에서 세션 복원 시도"""
+    if 'session_restored' not in st.session_state and not st.session_state.get('logged_in', False):
+        st.session_state.session_restored = True
+
+        # 로컬 파일에서 세션 복원
+        session_data = load_session_from_localStorage()
+        if session_data:
+            token = session_data.get('session_token', '')
+            email = session_data.get('user_email', '')
+
+            # 디버깅: 세션 복원 시도 메시지
+            st.info(f"세션 복원 시도: {email}")
+
+            if token and email and validate_session_token(token, email):
+                # 세션 복원
+                st.session_state.logged_in = True
+                st.session_state.user_email = email
+                st.session_state.username = session_data.get('username', '')
+                st.session_state.auth_level = session_data.get('auth_level', 0)
+                st.session_state.session_token = token
+                st.session_state.profile_department = session_data.get('profile_department', '전략팀')
+                st.success(f"세션 복원 성공: {email}")
+                return True
+            else:
+                st.warning(f"세션 토큰 검증 실패: {email}")
+        else:
+            st.info("저장된 세션이 없습니다.")
+    return False
+
 
 def main():
     """메인 함수"""
@@ -1644,20 +1747,21 @@ def main():
         layout="wide"
     )
 
-    # 세션 상태 초기화 (더 강력한 세션 지속성)
+    # 세션 상태 초기화
     if 'session_initialized' not in st.session_state:
         st.session_state.session_initialized = True
         st.session_state.logged_in = False
 
-    # 간단한 세션 체크
-    # localStorage 함수는 비활성화됨
+        # 파일에서 세션 복원 시도
+        if initialize_session_from_localStorage():
+            st.rerun()
 
     if 'password_reset_needed' not in st.session_state:
         st.session_state.password_reset_needed = False
 
     # 세션 상태 유효성 검사
     check_session_validity()
-    
+
     # 페이지 라우팅
     if st.session_state.get('password_reset_needed', False):
         password_reset_page()

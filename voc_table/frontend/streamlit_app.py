@@ -86,22 +86,182 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return get_password_hash(plain_password) == hashed_password
 
 def generate_session_token(email: str) -> str:
-    """세션 토큰 생성"""
-    timestamp = str(int(time.time()))
-    raw_token = f"{email}_{timestamp}_voc_session"
-    return hashlib.md5(raw_token.encode()).hexdigest()[:16]
+    """세션 토큰 생성 (개선된 버전)"""
+    import base64
+    
+    # 24시간 후 만료
+    expire_time = int(time.time()) + (24 * 60 * 60)
+    token_data = f"{email}:{expire_time}:voc_session"
+    
+    # Base64로 인코딩하여 토큰 생성
+    token_b64 = base64.b64encode(token_data.encode()).decode()
+    return token_b64
 
 def validate_session_token(token: str, email: str) -> bool:
-    """세션 토큰 검증"""
-    if not token or len(token) != 16:
+    """세션 토큰 검증 (개선된 버전)"""
+    try:
+        import base64
+
+        if not token or not email:
+            return False
+
+        # Base64 디코딩 시도
+        try:
+            token_data = base64.b64decode(token.encode()).decode()
+            parts = token_data.split(':')
+
+            if len(parts) == 3:
+                token_email, expire_str, session_type = parts
+
+                # 이메일 확인
+                if token_email != email:
+                    return False
+
+                # 만료 시간 확인
+                expire_time = int(expire_str)
+                current_time = time.time()
+                if current_time > expire_time:
+                    return False
+
+                # 세션 타입 확인
+                if session_type != "voc_session":
+                    return False
+
+                return True
+        except:
+            # Base64 디코딩 실패 시 기존 방식으로 폴백
+            pass
+
+        # 기존 방식: 세션 토큰이 세션 상태에 저장된 것과 일치하는지 확인
+        if 'session_token' in st.session_state:
+            return st.session_state.session_token == token
+        
+        # 기본 검증
+        return len(token) >= 8  # 최소 길이 확인
+
+    except Exception:
         return False
-    
-    # 세션 토큰이 세션 상태에 저장된 것과 일치하는지 확인
-    if 'session_token' in st.session_state:
-        return st.session_state.session_token == token
-    
-    # URL 파라미터에서 온 토큰의 경우 기본 검증만 수행
-    return True
+
+def check_session_validity():
+    """현재 세션 상태 확인 및 자동 로그인"""
+    # 이미 로그인 상태라면 토큰 검증
+    if st.session_state.get('logged_in', False):
+        token = st.session_state.get('session_token')
+        email = st.session_state.get('user_email')
+
+        if token and email and validate_session_token(token, email):
+            # 유효한 세션
+            return True
+        else:
+            # 세션 만료, 로그아웃 처리
+            for key in ['logged_in', 'user_email', 'username', 'auth_level', 'session_token', 'profile_department']:
+                if key in st.session_state:
+                    del st.session_state[key]
+            return False
+    return False
+
+def save_session_to_localStorage():
+    """세션을 로컬 파일에 저장"""
+    if st.session_state.get('logged_in', False):
+        session_data = {
+            'user_email': st.session_state.get('user_email', ''),
+            'username': st.session_state.get('username', ''),
+            'auth_level': st.session_state.get('auth_level', 0),
+            'session_token': st.session_state.get('session_token', ''),
+            'profile_department': st.session_state.get('profile_department', '전략팀'),
+            'timestamp': time.time()
+        }
+
+        session_dir = os.path.join(BASE_DIR, ".sessions")
+        os.makedirs(session_dir, exist_ok=True)
+
+        # 사용자별 세션 파일
+        session_file = os.path.join(session_dir, f"session_{hashlib.md5(session_data['user_email'].encode()).hexdigest()}.json")
+
+        try:
+            with open(session_file, 'w', encoding='utf-8') as f:
+                json.dump(session_data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            pass  # 조용히 처리
+
+def load_session_from_localStorage():
+    """로컬 파일에서 최신 세션 로드"""
+    session_dir = os.path.join(BASE_DIR, ".sessions")
+    if not os.path.exists(session_dir):
+        return None
+
+    try:
+        # 모든 세션 파일 검색
+        session_files = [f for f in os.listdir(session_dir) if f.startswith("session_") and f.endswith(".json")]
+
+        if not session_files:
+            return None
+
+        # 가장 최근 세션 파일 찾기
+        latest_session = None
+        latest_time = 0
+
+        for session_file in session_files:
+            file_path = os.path.join(session_dir, session_file)
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    session_data = json.load(f)
+
+                # 24시간 이내 세션만 유효
+                session_time = session_data.get('timestamp', 0)
+                if time.time() - session_time < 24 * 60 * 60:  # 24시간
+                    if session_time > latest_time:
+                        latest_time = session_time
+                        latest_session = session_data
+                else:
+                    # 만료된 세션 파일 삭제
+                    os.remove(file_path)
+            except Exception:
+                # 손상된 파일 삭제
+                try:
+                    os.remove(file_path)
+                except Exception:
+                    pass
+
+        return latest_session
+    except Exception:
+        return None
+
+def clear_localStorage():
+    """로컬 세션 파일 제거"""
+    session_dir = os.path.join(BASE_DIR, ".sessions")
+    if os.path.exists(session_dir):
+        try:
+            # 현재 사용자의 세션 파일만 삭제
+            if st.session_state.get('user_email'):
+                email_hash = hashlib.md5(st.session_state['user_email'].encode()).hexdigest()
+                session_file = os.path.join(session_dir, f"session_{email_hash}.json")
+                if os.path.exists(session_file):
+                    os.remove(session_file)
+        except Exception:
+            pass
+
+def initialize_session_from_localStorage():
+    """페이지 로드 시 파일에서 세션 복원 시도"""
+    if 'session_restored' not in st.session_state and not st.session_state.get('logged_in', False):
+        st.session_state.session_restored = True
+
+        # 로컬 파일에서 세션 복원
+        session_data = load_session_from_localStorage()
+        if session_data:
+            token = session_data.get('session_token', '')
+            email = session_data.get('user_email', '')
+
+            if token and email and validate_session_token(token, email):
+                # 세션 복원
+                st.session_state.logged_in = True
+                st.session_state.user_email = email
+                st.session_state.username = session_data.get('username', '')
+                st.session_state.auth_level = session_data.get('auth_level', 0)
+                st.session_state.session_token = token
+                st.session_state.profile_department = session_data.get('profile_department', '전략팀')
+                return True
+    return False
 
 def auto_login_from_url():
     """URL 파라미터에서 자동 로그인 시도 (비활성화)"""
@@ -361,6 +521,9 @@ def login_page():
                         token = generate_session_token(email)
                         st.session_state.session_token = token
                         
+                        # 세션을 파일에 저장
+                        save_session_to_localStorage()
+                        
                         st.success("로그인 성공!")
                         st.rerun()
                     else:
@@ -436,6 +599,9 @@ def voc_table_page():
         lo_spacer, lo_btn = st.columns([0.35, 0.65])
         with lo_btn:
             if st.button("🚪 로그아웃"):
+                # localStorage 세션 삭제
+                clear_localStorage()
+                
                 # 세션 상태 완전 초기화
                 keys_to_remove = [
                     'logged_in', 'user_email', 'username', 'auth_level', 
@@ -447,7 +613,6 @@ def voc_table_page():
                     if key in st.session_state:
                         del st.session_state[key]
                 
-                # 세션 상태만 초기화 (URL 파라미터는 건드리지 않음)
                 st.rerun()
     
     # 설정 모달 표시 (조건부 렌더링)
@@ -1610,9 +1775,14 @@ def main():
     if 'password_reset_needed' not in st.session_state:
         st.session_state.password_reset_needed = False
     
-    # 로그인되지 않은 상태에서 자동 로그인 시도
+    # 세션 복원 로직 강화
     if not st.session_state.logged_in:
-        # 세션 토큰이 있는 경우 유효성 검사
+        # 1. 파일에서 세션 복원 시도
+        if initialize_session_from_localStorage():
+            st.rerun()
+            return
+        
+        # 2. 세션 토큰이 있는 경우 유효성 검사
         if 'session_token' in st.session_state and 'user_email' in st.session_state:
             if validate_session_token(st.session_state.session_token, st.session_state.user_email):
                 # 사용자 정보 다시 조회하여 세션 상태 복원
@@ -1624,6 +1794,17 @@ def main():
                     st.session_state.auth_level = user['auth_level']
                     st.session_state.profile_department = user.get('department', '전략팀')
                     st.rerun()
+                    return
+    
+    # 로그인된 상태에서 세션 유효성 검사
+    if st.session_state.logged_in:
+        if not check_session_validity():
+            # 세션이 유효하지 않으면 로그아웃 처리
+            for key in ['logged_in', 'user_email', 'username', 'auth_level', 'session_token', 'profile_department']:
+                if key in st.session_state:
+                    del st.session_state[key]
+            st.rerun()
+            return
     
     # 페이지 라우팅
     if st.session_state.get('password_reset_needed', False):

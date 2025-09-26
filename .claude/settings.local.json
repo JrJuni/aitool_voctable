@@ -11,7 +11,9 @@
       "Bash(docker exec:*)",
       "mcp__playwright__browser_navigate",
       "mcp__playwright__browser_wait_for",
-      "mcp__playwright__browser_click"
+      "mcp__playwright__browser_click",
+      "Bash(python -m streamlit run:*)",
+      "mcp__sequential-thinking__sequentialthinking"
     ],
     "deny": [],
     "ask": []
