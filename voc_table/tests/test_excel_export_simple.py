@@ -127,7 +127,8 @@ def create_test_data():
             "ai_model": "GPT-4",
             "perf": "고성능",
             "power": "저전력",
-            "size": "소형",
+            "form_factor": "소형",
+            "memory": "8GB",
             "price": "경쟁력 있는 가격",
             "requirements": "고성능 AI 처리",
             "competitors": "애플, 구글",
@@ -144,7 +145,8 @@ def create_test_data():
             "ai_model": "BERT",
             "perf": "중간 성능",
             "power": "저전력",
-            "size": "중형",
+            "form_factor": "중형",
+            "memory": "16GB",
             "price": "합리적 가격",
             "requirements": "안정적인 IoT 연결",
             "competitors": "삼성, SK텔레콤",
@@ -215,7 +217,7 @@ def _adjust_column_widths(writer, sheet_name, df):
             elif column in ['ai_summary']:
                 # AI 요약은 최소 25, 최대 40
                 width = min(max(min_width, max_data_length, 25), 40)
-            elif column in ['name', 'title', 'email', 'phone', 'domain', 'revenue', 'nation', 'field', 'target_app', 'ai_model', 'perf', 'power', 'size', 'price', 'company_name']:
+            elif column in ['name', 'title', 'email', 'phone', 'domain', 'revenue', 'nation', 'field', 'target_app', 'ai_model', 'perf', 'power', 'form_factor', 'memory', 'price', 'company_name']:
                 # 일반 텍스트 컬럼은 최소 15, 최대 25
                 width = min(max(min_width, max_data_length, 15), 25)
             elif column in ['status', 'priority', 'action', 'table_name']:

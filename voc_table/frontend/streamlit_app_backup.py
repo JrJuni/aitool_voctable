@@ -75,7 +75,7 @@ def _modal_ctx(title: str, key: str = "modal"):
         return st.modal(title, key=key)
     # Fallback: container with a title - 숨김 처리
     st.markdown(f"### {title}")
-    return st.container(border=True)
+    return st.container()  # border 매개변수 제거
 
 def get_password_hash(password: str) -> str:
     """간단한 비밀번호 해싱 (개발용)"""
@@ -86,26 +86,67 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return get_password_hash(plain_password) == hashed_password
 
 def generate_session_token(email: str) -> str:
-    """세션 토큰 생성"""
-    timestamp = str(int(time.time()))
-    raw_token = f"{email}_{timestamp}_voc_session"
-    return hashlib.md5(raw_token.encode()).hexdigest()[:16]
+    """세션 토큰 생성 (24시간 유효)"""
+    import base64
+
+    # 24시간 후 만료
+    expire_time = int(time.time()) + (24 * 60 * 60)
+    token_data = f"{email}:{expire_time}:voc_session"
+
+    # Base64로 인코딩하여 토큰 생성
+    token_b64 = base64.b64encode(token_data.encode()).decode()
+    return token_b64
 
 def validate_session_token(token: str, email: str) -> bool:
     """세션 토큰 검증"""
-    if not token or len(token) != 16:
-        return False
-    
-    # 세션 토큰이 세션 상태에 저장된 것과 일치하는지 확인
-    if 'session_token' in st.session_state:
-        return st.session_state.session_token == token
-    
-    # URL 파라미터에서 온 토큰의 경우 기본 검증만 수행
-    return True
+    try:
+        import base64
 
-def auto_login_from_url():
-    """URL 파라미터에서 자동 로그인 시도 (비활성화)"""
-    # URL 파라미터 기반 자동 로그인을 비활성화하고 세션 상태만 사용
+        if not token:
+            return False
+
+        # Base64 디코딩
+        token_data = base64.b64decode(token.encode()).decode()
+        parts = token_data.split(':')
+
+        if len(parts) != 3:
+            return False
+
+        token_email, expire_str, session_type = parts
+
+        # 이메일 확인
+        if token_email != email:
+            return False
+
+        # 만료 시간 확인
+        expire_time = int(expire_str)
+        if time.time() > expire_time:
+            return False
+
+        # 세션 타입 확인
+        if session_type != "voc_session":
+            return False
+
+        return True
+    except Exception:
+        return False
+
+def check_session_validity():
+    """현재 세션 상태 확인 및 자동 로그인"""
+    # 이미 로그인 상태라면 토큰 검증
+    if st.session_state.get('logged_in', False):
+        token = st.session_state.get('session_token')
+        email = st.session_state.get('user_email')
+
+        if token and email and validate_session_token(token, email):
+            # 유효한 세션
+            return True
+        else:
+            # 세션 만료, 로그아웃 처리
+            for key in ['logged_in', 'user_email', 'username', 'auth_level', 'session_token', 'profile_department']:
+                if key in st.session_state:
+                    del st.session_state[key]
+            return False
     return False
 
 # 사용자 데이터 파일 경로를 모듈 디렉터리 기준으로 고정
@@ -316,6 +357,7 @@ def password_reset_page():
                     # 세션 토큰 생성
                     token = generate_session_token(st.session_state.user_email)
                     st.session_state.session_token = token
+                    # URL 파라미터는 사용하지 않고 세션 상태만 사용
                     
                     st.success("비밀번호가 성공적으로 변경되었습니다!")
                     st.rerun()
@@ -350,16 +392,15 @@ def login_page():
                     
                     user_info = authenticate_user(email, password)
                     if user_info and user_info["authenticated"]:
-                        # 세션 상태 설정
                         st.session_state.logged_in = True
                         st.session_state.user_email = email
                         st.session_state.username = user_info["username"]
                         st.session_state.auth_level = user_info["auth_level"]
-                        st.session_state.profile_department = user_info.get("department", "전략팀")
                         
                         # 세션 토큰 생성
                         token = generate_session_token(email)
                         st.session_state.session_token = token
+                        # URL 파라미터는 사용하지 않고 세션 상태만 사용
                         
                         st.success("로그인 성공!")
                         st.rerun()
@@ -436,18 +477,11 @@ def voc_table_page():
         lo_spacer, lo_btn = st.columns([0.35, 0.65])
         with lo_btn:
             if st.button("🚪 로그아웃"):
-                # 세션 상태 완전 초기화
-                keys_to_remove = [
-                    'logged_in', 'user_email', 'username', 'auth_level', 
-                    'session_token', 'profile_department', 'password_reset_needed',
-                    'show_settings_modal', 'show_reauth_modal', 'show_edit_profile_modal',
-                    'show_user_mgmt_modal', 'reauth_context', 'edit_mode'
-                ]
-                for key in keys_to_remove:
+                # 세션 상태 초기화
+                for key in ['logged_in', 'user_email', 'username', 'auth_level', 'session_token']:
                     if key in st.session_state:
                         del st.session_state[key]
-                
-                # 세션 상태만 초기화 (URL 파라미터는 건드리지 않음)
+                # URL 파라미터는 사용하지 않음 (세션 상태만 사용)
                 st.rerun()
     
     # 설정 모달 표시 (조건부 렌더링)
@@ -787,8 +821,6 @@ def _render_project_tab():
                 "대상앱": st.column_config.TextColumn("대상앱", width=100),
                 "AI모델": st.column_config.TextColumn("AI모델", width=120),
                 "성능": st.column_config.TextColumn("성능", width=100),
-                "폼팩터": st.column_config.TextColumn("폼팩터", width=100),
-                "메모리": st.column_config.TextColumn("메모리", width=100),
                 "회사": st.column_config.TextColumn("회사", width=150),
                 "상태": st.column_config.SelectboxColumn("상태", width=80, options=["대기", "진행중", "완료", "보류"]),
             },
@@ -813,8 +845,6 @@ def _render_project_tab():
                 "대상앱": st.column_config.TextColumn("대상앱", width=100),
                 "AI모델": st.column_config.TextColumn("AI모델", width=120),
                 "성능": st.column_config.TextColumn("성능", width=100),
-                "폼팩터": st.column_config.TextColumn("폼팩터", width=100),
-                "메모리": st.column_config.TextColumn("메모리", width=100),
                 "회사": st.column_config.TextColumn("회사", width=150),
                 "상태": st.column_config.TextColumn("상태", width=80),
             },
@@ -834,8 +864,6 @@ def _render_project_tab():
             
             project_company = st.selectbox("회사", ["ABC Corp", "XYZ Ltd", "DEF Inc"])
             project_perf = st.text_input("성능")
-            project_form_factor = st.text_input("폼팩터")
-            project_memory = st.text_input("메모리")
             project_requirements = st.text_area("요구사항")
             
             if st.form_submit_button("프로젝트 추가"):
@@ -924,8 +952,6 @@ def _convert_frontend_to_api_data(data_type, data):
                 "target_app": item.get('대상앱'),
                 "ai_model": item.get('AI모델'),
                 "perf": item.get('성능'),
-                "form_factor": item.get('폼팩터'),
-                "memory": item.get('메모리'),
                 "status": item.get('상태')
             }
         
@@ -1173,8 +1199,6 @@ def _get_project_data():
                     "대상앱": item.get('target_app', ''),
                     "AI모델": item.get('ai_model', ''),
                     "성능": item.get('perf', ''),
-                    "폼팩터": item.get('form_factor', ''),
-                    "메모리": item.get('memory', ''),
                     "회사": item.get('company', {}).get('name', '') if item.get('company') else '',
                     "상태": "진행중"  # 임시 상태
                 })
@@ -1182,13 +1206,13 @@ def _get_project_data():
         else:
             # API 호출 실패 시 임시 데이터 반환
             return [
-                {"ID": 1, "프로젝트명": "AI 챗봇 개발", "분야": "AI", "대상앱": "웹", "AI모델": "GPT-4", "성능": "고성능", "폼팩터": "서버", "메모리": "32GB", "회사": "ABC Corp", "상태": "진행중"},
-                {"ID": 2, "프로젝트명": "데이터 분석", "분야": "Data", "대상앱": "모바일", "AI모델": "BERT", "성능": "중성능", "폼팩터": "모바일", "메모리": "8GB", "회사": "XYZ Ltd", "상태": "완료"},
-                {"ID": 3, "프로젝트명": "이미지 인식", "분야": "CV", "대상앱": "데스크톱", "AI모델": "ResNet", "성능": "고성능", "폼팩터": "데스크톱", "메모리": "16GB", "회사": "DEF Inc", "상태": "대기"},
-                {"ID": 4, "프로젝트명": "음성 인식", "분야": "NLP", "대상앱": "모바일", "AI모델": "Whisper", "성능": "고성능", "폼팩터": "모바일", "메모리": "6GB", "회사": "GHI Co", "상태": "진행중"},
-                {"ID": 5, "프로젝트명": "추천 시스템", "분야": "ML", "대상앱": "웹", "AI모델": "Transformer", "성능": "중성능", "폼팩터": "클라우드", "메모리": "64GB", "회사": "JKL Ltd", "상태": "완료"},
-                {"ID": 6, "프로젝트명": "API 연동", "분야": "Integration", "대상앱": "웹", "AI모델": "Custom", "성능": "중성능", "폼팩터": "서버", "메모리": "16GB", "회사": "MNO Corp", "상태": "진행중"},
-                {"ID": 7, "프로젝트명": "데이터 마이그레이션", "분야": "Data", "대상앱": "서버", "AI모델": "N/A", "성능": "고성능", "폼팩터": "서버", "메모리": "128GB", "회사": "PQR Ltd", "상태": "대기"},
+                {"ID": 1, "프로젝트명": "AI 챗봇 개발", "분야": "AI", "대상앱": "웹", "AI모델": "GPT-4", "성능": "고성능", "회사": "ABC Corp", "상태": "진행중"},
+                {"ID": 2, "프로젝트명": "데이터 분석", "분야": "Data", "대상앱": "모바일", "AI모델": "BERT", "성능": "중성능", "회사": "XYZ Ltd", "상태": "완료"},
+                {"ID": 3, "프로젝트명": "이미지 인식", "분야": "CV", "대상앱": "데스크톱", "AI모델": "ResNet", "성능": "고성능", "회사": "DEF Inc", "상태": "대기"},
+                {"ID": 4, "프로젝트명": "음성 인식", "분야": "NLP", "대상앱": "모바일", "AI모델": "Whisper", "성능": "고성능", "회사": "GHI Co", "상태": "진행중"},
+                {"ID": 5, "프로젝트명": "추천 시스템", "분야": "ML", "대상앱": "웹", "AI모델": "Transformer", "성능": "중성능", "회사": "JKL Ltd", "상태": "완료"},
+                {"ID": 6, "프로젝트명": "API 연동", "분야": "Integration", "대상앱": "웹", "AI모델": "Custom", "성능": "중성능", "회사": "MNO Corp", "상태": "진행중"},
+                {"ID": 7, "프로젝트명": "데이터 마이그레이션", "분야": "Data", "대상앱": "서버", "AI모델": "N/A", "성능": "고성능", "회사": "PQR Ltd", "상태": "대기"},
             ]
     except Exception as e:
         # API 서버가 실행되지 않은 경우 조용히 처리
@@ -1610,20 +1634,8 @@ def main():
     if 'password_reset_needed' not in st.session_state:
         st.session_state.password_reset_needed = False
     
-    # 로그인되지 않은 상태에서 자동 로그인 시도
-    if not st.session_state.logged_in:
-        # 세션 토큰이 있는 경우 유효성 검사
-        if 'session_token' in st.session_state and 'user_email' in st.session_state:
-            if validate_session_token(st.session_state.session_token, st.session_state.user_email):
-                # 사용자 정보 다시 조회하여 세션 상태 복원
-                temp_users = get_temp_users()
-                user = temp_users.get(st.session_state.user_email)
-                if user and user['is_active'] and user['auth_level'] > 0:
-                    st.session_state.logged_in = True
-                    st.session_state.username = user['username']
-                    st.session_state.auth_level = user['auth_level']
-                    st.session_state.profile_department = user.get('department', '전략팀')
-                    st.rerun()
+    # 세션 상태 유효성 검사
+    check_session_validity()
     
     # 페이지 라우팅
     if st.session_state.get('password_reset_needed', False):

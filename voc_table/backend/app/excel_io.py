@@ -550,7 +550,7 @@ def _create_empty_project_template_sheet(writer: pd.ExcelWriter, sheet_name: str
         # Project 템플릿용 컬럼 정의 (제외 컬럼 제외, company_name 추가)
         project_columns = [
             'id', 'name', 'company_name', 'field', 'target_app', 'ai_model',
-            'perf', 'power', 'size', 'price', 'requirements', 'competitors', 
+            'perf', 'power', 'form_factor', 'memory', 'price', 'requirements', 'competitors', 
             'result', 'root_cause'
         ]
         
@@ -690,7 +690,7 @@ def _adjust_column_widths(writer: pd.ExcelWriter, sheet_name: str, df: pd.DataFr
             elif column in ['ai_summary']:
                 # AI 요약은 최소 25, 최대 40
                 width = min(max(min_width, max_data_length, 25), 40)
-            elif column in ['name', 'title', 'email', 'phone', 'domain', 'revenue', 'nation', 'field', 'target_app', 'ai_model', 'perf', 'power', 'size', 'price', 'company_name']:
+            elif column in ['name', 'title', 'email', 'phone', 'domain', 'revenue', 'nation', 'field', 'target_app', 'ai_model', 'perf', 'power', 'form_factor', 'memory', 'price', 'company_name']:
                 # 일반 텍스트 컬럼은 최소 15, 최대 25
                 width = min(max(min_width, max_data_length, 15), 25)
             elif column in ['status', 'priority', 'action', 'table_name']:
@@ -803,7 +803,7 @@ def _adjust_template_column_widths(writer: pd.ExcelWriter, sheet_name: str, df: 
                 elif column in ['field', 'target_app', 'ai_model']:
                     # 분야/타겟앱/AI모델은 중간 크기 (최소 15, 최대 25)
                     width = min(max(min_width, max_data_length, 15), 25)
-                elif column in ['perf', 'power', 'size', 'price']:
+                elif column in ['perf', 'power', 'form_factor', 'memory', 'price']:
                     # 기술 스펙은 작게 (최소 10, 최대 15)
                     width = min(max(min_width, max_data_length, 10), 15)
                 elif column in ['id']:
