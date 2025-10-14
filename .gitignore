@@ -208,33 +208,42 @@ __marimo__/
 
 # VOC Table Project specific
 # Excel exports
-projects/voc_table/exports/
+voc_table/exports/
 *.xlsx
 *.xls
 
 # VOC Table logs
-projects/voc_table/logs/
-projects/voc_table/backend/logs/
+voc_table/logs/
+voc_table/backend/logs/
+logs/
 
 # VOC Table database
-projects/voc_table/*.db
-projects/voc_table/*.sqlite
-projects/voc_table/*.sqlite3
+voc_table/*.db
+voc_table/*.sqlite
+voc_table/*.sqlite3
 
 # VOC Table temporary files
-projects/voc_table/temp/
-projects/voc_table/tmp/
-projects/voc_table/*.tmp
+voc_table/temp/
+voc_table/tmp/
+voc_table/*.tmp
 
 # VOC Table AI models
-projects/voc_table/models/*.gguf
-projects/voc_table/models/*.bin
-projects/voc_table/models/*.safetensors
+voc_table/models/*.gguf
+voc_table/models/*.bin
+voc_table/models/*.safetensors
+models/
 
 # VOC Table configuration files with sensitive data
-projects/voc_table/config.yaml
-projects/voc_table/.env.local
-projects/voc_table/.env.production
+voc_table/config.yaml
+voc_table/.env.local
+voc_table/.env.production
 
-# models
-models/
+# VOC Table user data and sessions
+voc_table/frontend/user_data.json
+voc_table/frontend/user_data.json.bak
+voc_table/frontend/.sessions/
+voc_table/frontend/.sessions/*
+
+# VOC Table backup files
+*.bak
+*.backup
