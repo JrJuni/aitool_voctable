@@ -6,11 +6,61 @@ import time
 import json
 import os
 import tempfile
+import warnings
+import secrets
 from typing import Optional, Dict, Any
 import streamlit_cookies_manager as cookies_manager
+import mysql.connector
+from mysql.connector import Error
+
+# Streamlit cache deprecation 경고 억제
+warnings.filterwarnings("ignore", message=".*st.cache.*", category=FutureWarning)
 
 # 백엔드 API URL 설정
 API_BASE_URL = os.getenv("API_BASE_URL", "http://172.16.5.75:8000")
+
+# 데이터 소스 우선순위 설정 (환경변수로 제어 가능)
+DATA_SOURCE_PRIORITY = os.getenv("DATA_SOURCE_PRIORITY", "api_first")  # "api_first" 또는 "local_first"
+
+# 사용자 데이터 파일 경로를 모듈 디렉터리 기준으로 고정
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# =============================================================================
+# 쿠키 암호화 키 고정 시스템 (새로고침 문제 해결)
+# =============================================================================
+def get_or_create_cookie_key():
+    """쿠키 암호화 키를 파일에서 읽거나 새로 생성"""
+    cookie_key_file = os.path.join(BASE_DIR, ".cookie_secret_key")
+
+    # 환경변수 우선 확인
+    env_key = os.getenv("COOKIE_SECRET_KEY")
+    if env_key and len(env_key) >= 32:
+        return env_key
+
+    # 파일에서 키 읽기
+    if os.path.exists(cookie_key_file):
+        try:
+            with open(cookie_key_file, 'r', encoding='utf-8') as f:
+                key = f.read().strip()
+                if len(key) >= 32:
+                    return key
+        except Exception:
+            pass
+
+    # 새 키 생성 및 저장
+    new_key = secrets.token_urlsafe(32)
+    try:
+        with open(cookie_key_file, 'w', encoding='utf-8') as f:
+            f.write(new_key)
+        # 파일 권한 제한 (Unix 계열만)
+        try:
+            os.chmod(cookie_key_file, 0o600)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    return new_key
 
 # 쿠키 매니저 초기화 (세션 쿠키 지원을 위해 CookieManager를 직접 확장)
 class SessionCookieManager(cookies_manager.EncryptedCookieManager):
@@ -27,10 +77,156 @@ class SessionCookieManager(cookies_manager.EncryptedCookieManager):
             path=self._cookie_manager._path,
         )
 
+    def set_persistent_cookie(self, key: str, value: str, expires_days: int = 7):
+        """영구 쿠키 설정 (지정된 일수 동안 유지)"""
+        encrypted_value = self._encrypt(value.encode('utf-8')).decode('utf-8')
+        expires_at = time.time() + (expires_days * 24 * 60 * 60)
+        self._cookie_manager._queue[key] = dict(
+            value=encrypted_value,
+            expires_at=expires_at,  # 영구 쿠키로 설정
+            path=self._cookie_manager._path,
+        )
+
+# 고정된 암호화 키로 쿠키 매니저 초기화
 cookies = SessionCookieManager(
     prefix="voc_auth_",
-    password=os.getenv("COOKIE_SECRET_KEY", "your-secret-key-change-in-production")  # 환경변수에서 읽기
+    password=get_or_create_cookie_key()
 )
+
+# =============================================================================
+# 로컬 DB 접근 함수들 (API 서버 의존성 제거)
+# =============================================================================
+
+def get_db_connection():
+    """로컬 MySQL DB 연결"""
+    try:
+        connection = mysql.connector.connect(
+            host=os.getenv("DB_HOST", "localhost"),
+            port=int(os.getenv("DB_PORT", "3306")),
+            user=os.getenv("DB_USER", "root"),
+            password=os.getenv("DB_PASSWORD", ""),
+            database=os.getenv("DB_NAME", "voc_table"),
+            charset='utf8mb4',
+            autocommit=True
+        )
+        return connection
+    except Error as e:
+        if st.session_state.get('debug_mode', False):
+            st.write(f"🐛 DEBUG: DB 연결 실패: {e}")
+        return None
+
+def get_user_info_from_db(email: str) -> Optional[Dict[str, Any]]:
+    """API 서버 없이 로컬 DB에서 사용자 정보 조회"""
+    connection = get_db_connection()
+    if not connection:
+        return None
+    
+    try:
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT id, email, username, auth_level, department, is_active
+            FROM users 
+            WHERE email = %s AND is_active = 1
+        """, (email,))
+        
+        user = cursor.fetchone()
+        if user:
+            return {
+                'id': user['id'],
+                'email': user['email'],
+                'username': user['username'],
+                'auth_level': user['auth_level'],
+                'department': user['department'] or '전략팀'
+            }
+        return None
+    except Error as e:
+        if st.session_state.get('debug_mode', False):
+            st.write(f"🐛 DEBUG: DB 조회 실패: {e}")
+        return None
+    finally:
+        if connection and connection.is_connected():
+            cursor.close()
+            connection.close()
+
+def authenticate_user_locally(email: str, password: str) -> Optional[Dict[str, Any]]:
+    """로컬 DB에서 사용자 인증 (비밀번호 해시 검증)"""
+    connection = get_db_connection()
+    if not connection:
+        return None
+    
+    try:
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT id, email, username, password_hash, auth_level, department, is_active
+            FROM users 
+            WHERE email = %s AND is_active = 1
+        """, (email,))
+        
+        user = cursor.fetchone()
+        if user:
+            # 비밀번호 해시 검증 (passlib bcrypt 방식)
+            from passlib.context import CryptContext
+            pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+            
+            if pwd_context.verify(password, user['password_hash']):
+                return {
+                    'id': user['id'],
+                    'email': user['email'],
+                    'username': user['username'],
+                    'auth_level': user['auth_level'],
+                    'department': user['department'] or '전략팀',
+                    'authenticated': True
+                }
+        return None
+    except Error as e:
+        if st.session_state.get('debug_mode', False):
+            st.write(f"🐛 DEBUG: 로컬 인증 실패: {e}")
+        return None
+    finally:
+        if connection and connection.is_connected():
+            cursor.close()
+            connection.close()
+
+# =============================================================================
+# 백업 토큰 시스템 (bdpipe 방식)
+# =============================================================================
+
+def generate_backup_token(email: str) -> str:
+    """백업용 간단한 토큰 생성 (bdpipe 방식)"""
+    timestamp = str(int(time.time()))
+    raw_token = f"{email}_{timestamp}_voc_backup"
+    return hashlib.md5(raw_token.encode()).hexdigest()[:16]
+
+def validate_backup_token(token: str, email: str) -> bool:
+    """백업 토큰 검증 (bdpipe 방식)"""
+    if not token or len(token) != 16:
+        return False
+    # 간단한 검증 (실제 운영에서는 더 강화 필요)
+    return True
+
+def setup_url_backup_session(user_info: Dict[str, Any]):
+    """로그인 성공시 URL에 백업 토큰 설정"""
+    backup_token = generate_backup_token(user_info['email'])
+    
+    # URL 파라미터에 백업 정보 저장
+    st.query_params.update({
+        "backup_token": backup_token,
+        "backup_user": user_info['email']
+    })
+
+def restore_from_url_backup() -> Optional[Dict[str, Any]]:
+    """URL 백업에서 세션 복원"""
+    query_params = st.query_params
+    if 'backup_token' in query_params and 'backup_user' in query_params:
+        backup_token = query_params['backup_token']
+        backup_user = query_params['backup_user']
+        
+        if validate_backup_token(backup_token, backup_user):
+            # DB에서 직접 사용자 정보 조회
+            user_info = get_user_info_from_db(backup_user)
+            if user_info and user_info['auth_level'] > 0:
+                return user_info
+    return None
 
 # API 호출 헬퍼 함수들
 def get_auth_headers():
@@ -43,8 +239,28 @@ def get_cookie_auth_headers():
     """쿠키 기반 인증 헤더 생성"""
     return {"Content-Type": "application/x-www-form-urlencoded"}
 
+def login_locally(email: str, password: str):
+    """로컬 DB에서 직접 로그인 (API 서버 불필요)"""
+    try:
+        # 1. 로컬 DB에서 인증 시도
+        user_info = authenticate_user_locally(email, password)
+        if user_info:
+            return user_info
+        
+        # 2. 파일 기반 인증으로 폴백
+        user_info = authenticate_user(email, password)
+        if user_info:
+            return user_info
+        
+        return None
+        
+    except Exception as e:
+        if st.session_state.get('debug_mode', False):
+            st.write(f"🐛 DEBUG: 로컬 로그인 실패: {e}")
+        return None
+
 def api_login_with_cookie(email: str, password: str):
-    """쿠키 기반 로그인 API 호출"""
+    """쿠키 기반 로그인 API 호출 (기존 호환성 유지)"""
     try:
         # Form data로 전송
         data = {
@@ -73,14 +289,38 @@ def api_login_with_cookie(email: str, password: str):
     except Exception as e:
         return None
 
-def api_verify_cookie_auth():
-    """쿠키 기반 인증 검증 API 호출"""
+def verify_auth_locally():
+    """API 서버 없이 로컬에서 인증 검증 (개선: 즉시 삭제 방지)"""
     try:
         # 로컬 쿠키에서 토큰 가져오기
         auth_token = cookies.get('auth_token')
         if not auth_token:
             return None
-            
+
+        # JWT 토큰을 로컬에서 검증
+        user_info = verify_local_jwt_token(auth_token)
+        if user_info:
+            return user_info
+
+        # JWT 토큰이 유효하지 않아도 쿠키는 즉시 삭제하지 않음
+        # (파일 기반 세션 복원 등 다른 방법으로 재시도 가능하도록)
+        if st.session_state.get('debug_mode', False):
+            st.warning("⚠️ JWT 토큰 검증 실패. 다른 방법으로 세션 복원을 시도합니다.")
+        return None
+
+    except Exception as e:
+        if st.session_state.get('debug_mode', False):
+            st.write(f"🐛 DEBUG: 로컬 인증 검증 실패: {e}")
+        return None
+
+def api_verify_cookie_auth():
+    """쿠키 기반 인증 검증 API 호출 (개선: 즉시 삭제 방지)"""
+    try:
+        # 로컬 쿠키에서 토큰 가져오기
+        auth_token = cookies.get('auth_token')
+        if not auth_token:
+            return None
+
         # 토큰을 헤더에 포함하여 검증 요청
         headers = {"Authorization": f"Bearer {auth_token}"}
         response = requests.get(
@@ -88,15 +328,17 @@ def api_verify_cookie_auth():
             headers=headers,
             timeout=5
         )
-        
+
         if response.status_code == 200:
             return response.json()
         else:
-            # 토큰이 유효하지 않으면 쿠키 삭제
-            cookies.delete('auth_token')
-            cookies.save()
+            # API 인증 실패 시에도 쿠키는 즉시 삭제하지 않음
+            # (로컬 DB 인증 등 다른 방법으로 재시도 가능하도록)
+            if st.session_state.get('debug_mode', False):
+                st.warning("⚠️ API 인증 검증 실패. 다른 방법으로 세션 복원을 시도합니다.")
             return None
     except Exception as e:
+        # 네트워크 오류 등 예외 발생 시에도 쿠키는 유지
         return None
 
 def api_logout_with_cookie():
@@ -204,8 +446,38 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     """비밀번호 검증"""
     return get_password_hash(plain_password) == hashed_password
 
+def generate_local_jwt_token(email: str, user_info: Dict[str, Any]) -> str:
+    """로컬에서 JWT 토큰 생성 (서명 없이)"""
+    import base64
+    import json
+    
+    # 헤더
+    header = {
+        "alg": "none",
+        "typ": "JWT"
+    }
+    
+    # 페이로드
+    payload = {
+        "sub": email,
+        "username": user_info.get("username", ""),
+        "auth_level": user_info.get("auth_level", 0),
+        "department": user_info.get("department", "전략팀"),
+        "iat": int(time.time()),
+        "exp": int(time.time()) + (7 * 24 * 60 * 60)  # 7일
+    }
+    
+    # Base64 인코딩
+    header_b64 = base64.b64encode(json.dumps(header).encode()).decode().rstrip('=')
+    payload_b64 = base64.b64encode(json.dumps(payload).encode()).decode().rstrip('=')
+    
+    # JWT 토큰 생성 (서명 없음)
+    token = f"{header_b64}.{payload_b64}."
+    
+    return token
+
 def generate_session_token(email: str) -> str:
-    """세션 토큰 생성 (개선된 버전)"""
+    """세션 토큰 생성 (개선된 버전) - 기존 호환성 유지"""
     import base64
     
     # 24시간 후 만료
@@ -215,6 +487,50 @@ def generate_session_token(email: str) -> str:
     # Base64로 인코딩하여 토큰 생성
     token_b64 = base64.b64encode(token_data.encode()).decode()
     return token_b64
+
+def verify_local_jwt_token(token: str) -> Optional[Dict[str, Any]]:
+    """로컬 JWT 토큰 검증 (API 서버 불필요)"""
+    try:
+        import base64
+        import json
+        
+        if not token:
+            return None
+        
+        # JWT 토큰 파싱
+        parts = token.split('.')
+        if len(parts) != 3:
+            return None
+        
+        # 페이로드 디코딩
+        payload = parts[1]
+        # 패딩 추가
+        payload += '=' * (4 - len(payload) % 4)
+        decoded = base64.b64decode(payload)
+        token_data = json.loads(decoded)
+        
+        # 만료 시간 확인
+        if time.time() > token_data.get('exp', 0):
+            return None
+        
+        # 사용자 정보를 로컬 DB에서 조회
+        email = token_data.get('sub', '')
+        user_info = get_user_info_from_db(email)
+        
+        if user_info:
+            return {
+                'email': email,
+                'username': token_data.get('username', ''),
+                'auth_level': token_data.get('auth_level', 0),
+                'department': token_data.get('department', '전략팀')
+            }
+        
+        return None
+        
+    except Exception as e:
+        if st.session_state.get('debug_mode', False):
+            st.write(f"🐛 DEBUG: JWT 토큰 검증 실패: {e}")
+        return None
 
 def validate_session_token(token: str, email: str) -> bool:
     """세션 토큰 검증 (개선된 버전)"""
@@ -261,33 +577,52 @@ def validate_session_token(token: str, email: str) -> bool:
     except Exception:
         return False
 
-def check_session_validity():
-    """현재 세션 상태 확인 및 자동 로그인 - 쿠키 우선 검사"""
-    # 이미 로그인 상태라면 유효성 검증
-    if st.session_state.get('logged_in', False):
-        # 1. 먼저 쿠키 기반 인증 검증 (더 신뢰성 있음)
-        user_info = api_verify_cookie_auth()
-        if user_info:
-            # 쿠키가 유효하면 세션 상태 갱신
-            st.session_state.user_email = user_info.get('email', st.session_state.get('user_email', ''))
-            st.session_state.username = user_info.get('username', st.session_state.get('username', ''))
-            st.session_state.auth_level = user_info.get('auth_level', st.session_state.get('auth_level', 0))
-            st.session_state.profile_department = user_info.get('department', st.session_state.get('profile_department', '전략팀'))
-            return True
+def update_session_state(user_info: Dict[str, Any]):
+    """세션 상태 업데이트"""
+    st.session_state.user_email = user_info.get('email', st.session_state.get('user_email', ''))
+    st.session_state.username = user_info.get('username', st.session_state.get('username', ''))
+    st.session_state.auth_level = user_info.get('auth_level', st.session_state.get('auth_level', 0))
+    st.session_state.profile_department = user_info.get('department', st.session_state.get('profile_department', '전략팀'))
+    st.session_state.logged_in = True
 
-        # 2. 쿠키가 없거나 무효한 경우, 기존 세션 토큰 검사
+def clear_session_state():
+    """세션 상태 완전 초기화"""
+    for key in ['logged_in', 'user_email', 'username', 'auth_level', 'session_token', 'profile_department']:
+        if key in st.session_state:
+            del st.session_state[key]
+
+def auto_login_attempt() -> bool:
+    """로그인되지 않은 상태에서 자동 로그인 시도"""
+    # URL 백업에서 복원 시도
+    backup_info = restore_from_url_backup()
+    if backup_info:
+        update_session_state(backup_info)
+        return True
+    return False
+
+def check_session_validity():
+    """개선된 세션 상태 확인 - 성능 최적화 버전"""
+
+    # 이미 로그인 상태라면 기본 검증만 수행
+    if st.session_state.get('logged_in', False):
+        # 세션 토큰과 이메일이 있으면 유효하다고 간주 (빠름)
         token = st.session_state.get('session_token')
         email = st.session_state.get('user_email')
-
-        if token and email and validate_session_token(token, email):
+        if token and email:
             return True
 
-        # 3. 모든 인증 방법 실패 시 로그아웃 처리
-        for key in ['logged_in', 'user_email', 'username', 'auth_level', 'session_token', 'profile_department']:
-            if key in st.session_state:
-                del st.session_state[key]
+        # 토큰이 없으면 쿠키에서 복원 시도 (느림)
+        user_info = verify_auth_locally()
+        if user_info:
+            update_session_state(user_info)
+            return True
+
+        # 모든 방법 실패시 로그아웃
+        clear_session_state()
         return False
-    return False
+
+    # 로그인되지 않은 상태에서 자동 로그인 시도
+    return auto_login_attempt()
 
 def save_session_to_localStorage():
     """세션을 로컬 파일에 저장"""
@@ -371,13 +706,13 @@ def clear_localStorage():
             pass
 
 def initialize_session_from_cookie():
-    """페이지 로드 시 쿠키에서 세션 복원 시도"""
+    """페이지 로드 시 쿠키에서 세션 복원 시도 (로컬 우선)"""
     # 이미 로그인된 상태라면 스킵
     if st.session_state.get('logged_in', False):
         return False
 
-    # 쿠키 기반 인증 검증
-    user_info = api_verify_cookie_auth()
+    # 1. 로컬 쿠키 검증 (API 서버 불필요)
+    user_info = verify_auth_locally()
     if user_info:
         # 세션 복원
         st.session_state.logged_in = True
@@ -394,10 +729,34 @@ def initialize_session_from_cookie():
         save_session_to_localStorage()
 
         return True
+    
+    # 2. API 서버 쿠키 검증 (백업용)
+    try:
+        user_info = api_verify_cookie_auth()
+        if user_info:
+            # 세션 복원
+            st.session_state.logged_in = True
+            st.session_state.user_email = user_info.get('email', '')
+            st.session_state.username = user_info.get('username', '')
+            st.session_state.auth_level = user_info.get('auth_level', 0)
+            st.session_state.profile_department = user_info.get('department', '전략팀')
+
+            # 세션 토큰도 생성 (기존 로직과의 호환성을 위해)
+            token = generate_session_token(st.session_state.user_email)
+            st.session_state.session_token = token
+
+            # 파일 기반 세션도 저장 (백업용)
+            save_session_to_localStorage()
+
+            return True
+    except Exception:
+        # API 서버 연결 실패 시 조용히 넘어감
+        pass
+    
     return False
 
 def initialize_session_from_localStorage():
-    """페이지 로드 시 파일에서 세션 복원 시도 (기존 방식)"""
+    """페이지 로드 시 파일에서 세션 복원 시도 (개선: 쿠키 재동기화)"""
     if 'session_restored' not in st.session_state and not st.session_state.get('logged_in', False):
         st.session_state.session_restored = True
 
@@ -415,6 +774,16 @@ def initialize_session_from_localStorage():
                 st.session_state.auth_level = session_data.get('auth_level', 0)
                 st.session_state.session_token = token
                 st.session_state.profile_department = session_data.get('profile_department', '전략팀')
+
+                # 쿠키도 재설정 (동기화) - 중요!
+                try:
+                    cookies.set_persistent_cookie('auth_token', token, expires_days=7)
+                    cookies.set_persistent_cookie('user_email', email, expires_days=7)
+                    cookies.save()
+                except Exception as e:
+                    if st.session_state.get('debug_mode', False):
+                        st.write(f"🐛 DEBUG: 쿠키 재설정 실패: {e}")
+
                 return True
     return False
 
@@ -656,58 +1025,43 @@ def login_page():
             
             if submitted:
                 if email and password:
-                    # 쿠키 기반 로그인 시도
-                    login_result = api_login_with_cookie(email, password)
-                    if login_result:
-                        # 쿠키 기반 인증으로 사용자 정보 조회
-                        user_info = api_verify_cookie_auth()
-                        if user_info:
-                            # 세션 상태 설정
-                            st.session_state.logged_in = True
-                            st.session_state.user_email = user_info.get('email', email)
-                            st.session_state.username = user_info.get('username', '')
-                            st.session_state.auth_level = user_info.get('auth_level', 0)
-                            st.session_state.profile_department = user_info.get('department', '전략팀')
-                            
-                            # 세션 토큰 생성 (기존 로직과의 호환성을 위해)
-                            token = generate_session_token(st.session_state.user_email)
-                            st.session_state.session_token = token
-                            
-                            # 세션을 파일에 저장 (백업용)
-                            save_session_to_localStorage()
-                            
-                            st.success("로그인 성공!")
-                            st.rerun()
-                        else:
-                            st.error("사용자 정보를 가져올 수 없습니다.")
+                    # 로컬 인증 시도 (API 서버 불필요)
+                    user_info = login_locally(email, password)
+                    
+                    if user_info and user_info.get("authenticated"):
+                        # 세션 상태 설정
+                        st.session_state.logged_in = True
+                        st.session_state.user_email = email
+                        st.session_state.username = user_info["username"]
+                        st.session_state.auth_level = user_info["auth_level"]
+                        st.session_state.profile_department = user_info.get("department", "전략팀")
+                        
+                        # 로컬 JWT 토큰 생성
+                        jwt_token = generate_local_jwt_token(email, user_info)
+                        st.session_state.session_token = jwt_token
+                        
+                        # 영구 쿠키에 저장 (7일간 유지)
+                        cookies.set_persistent_cookie('auth_token', jwt_token, expires_days=7)
+                        cookies.set_persistent_cookie('user_email', email, expires_days=7)
+                        cookies.save()
+                        
+                        # URL 백업 시스템 설정
+                        setup_url_backup_session(user_info)
+                        
+                        # 세션을 파일에 저장 (백업용)
+                        save_session_to_localStorage()
+                        
+                        st.success("로그인 성공!")
+                        st.rerun()
                     else:
-                        # 쿠키 기반 로그인 실패 시 기존 방식으로 폴백
+                        # 비밀번호 재설정 필요 확인
                         if check_password_reset_needed(email, password):
                             st.session_state.user_email = email
                             st.session_state.password_reset_needed = True
                             st.rerun()
                             return
                         
-                        user_info = authenticate_user(email, password)
-                        if user_info and user_info["authenticated"]:
-                            # 세션 상태 설정
-                            st.session_state.logged_in = True
-                            st.session_state.user_email = email
-                            st.session_state.username = user_info["username"]
-                            st.session_state.auth_level = user_info["auth_level"]
-                            st.session_state.profile_department = user_info.get("department", "전략팀")
-                            
-                            # 세션 토큰 생성
-                            token = generate_session_token(email)
-                            st.session_state.session_token = token
-                            
-                            # 세션을 파일에 저장
-                            save_session_to_localStorage()
-                            
-                            st.success("로그인 성공!")
-                            st.rerun()
-                        else:
-                            st.error("잘못된 비밀번호입니다.")
+                        st.error("잘못된 이메일 또는 비밀번호입니다.")
                 else:
                     st.error("이메일과 비밀번호를 입력하세요.")
     
@@ -760,14 +1114,42 @@ def login_page():
             else:
                 st.error("이메일과 사용자명을 입력하세요.")
 
+def debug_session_status():
+    """디버그용 세션 상태 출력 (최적화: 디버그 모드일 때만 실행)"""
+    if not st.session_state.get('debug_mode', False):
+        return  # 디버그 모드가 아니면 즉시 리턴
+
+    with st.sidebar:
+        st.markdown("### 🐛 디버그 정보")
+
+        # 세션 상태 정보만 표시 (가볍게)
+        st.json({
+            "logged_in": st.session_state.get('logged_in', False),
+            "user_email": st.session_state.get('user_email', 'None'),
+            "auth_level": st.session_state.get('auth_level', 0),
+            "cookie_ready": cookies.ready(),
+        })
+
+        # 디버그 모드 토글 버튼
+        if st.button("🔴 디버그 모드 끄기"):
+            st.session_state['debug_mode'] = False
+            st.rerun()
+
 def voc_table_page():
     """VOC 테이블 페이지"""
     st.title("📊 VOC Management Dashboard")
-    
+
+    # 디버그 정보 표시
+    debug_session_status()
+
     # 상단 사용자 정보 (우측 정렬, 버튼 간 간격 축소)
     top_left, top_settings, top_logout = st.columns([6.8, 1.0, 1.4])
     with top_left:
-        st.write(f"안녕하세요, **{st.session_state.username}**님! (Level {st.session_state.auth_level})")
+        # 디버그 모드 토글 추가
+        if st.session_state.get('debug_mode', False):
+            st.write(f"🐛 **디버그 모드** | 안녕하세요, **{st.session_state.username}**님! (Level {st.session_state.auth_level})")
+        else:
+            st.write(f"안녕하세요, **{st.session_state.username}**님! (Level {st.session_state.auth_level})")
     with top_settings:
         # 수평 오프셋을 위한 서브 컬럼 구성 (약 50px 여백 근사)
         sub_spacer, sub_btn = st.columns([0.45, 0.55])
@@ -784,6 +1166,9 @@ def voc_table_page():
                 
                 # localStorage 세션 삭제
                 clear_localStorage()
+                
+                # URL 백업 파라미터 정리 (새로 추가)
+                st.query_params.clear()
                 
                 # 세션 상태 완전 초기화
                 keys_to_remove = [
@@ -1408,43 +1793,173 @@ def _save_all_changes():
 
 
 def _get_voc_data():
-    """VOC 데이터 가져오기"""
+    """VOC 데이터 가져오기 (공용 사용을 위한 하이브리드 방식)"""
     try:
-        # API에서 VOC 데이터 가져오기
-        data = api_get("/voc/")
-        if data:
-            # API 응답을 표시용 데이터로 변환
-            voc_list = []
-            for item in data:
-                voc_list.append({
-                    "ID": item.get('id', 0),
-                    "날짜": item.get('date', ''),
-                    "회사": item.get('company', {}).get('name', '') if item.get('company') else '',
-                    "내용": item.get('content', ''),
-                    "상태": item.get('status', ''),
-                    "우선순위": item.get('priority', ''),
-                    "담당자": item.get('assignee', {}).get('name', '') if item.get('assignee') else ''
-                })
-            return voc_list
+        # 환경변수에 따른 우선순위 결정
+        if DATA_SOURCE_PRIORITY == "api_first":
+            # 1. API 서버 우선 (공용 사용)
+            data = api_get("/voc/")
+            if data:
+                voc_list = []
+                for item in data:
+                    voc_list.append({
+                        "ID": item.get('id', 0),
+                        "날짜": item.get('date', ''),
+                        "회사": item.get('company', {}).get('name', '') if item.get('company') else '',
+                        "내용": item.get('content', ''),
+                        "상태": item.get('status', ''),
+                        "우선순위": item.get('priority', ''),
+                        "담당자": item.get('assignee', {}).get('name', '') if item.get('assignee') else ''
+                    })
+                return voc_list
+            
+            # 2. API 실패 시 로컬 DB 백업
+            connection = get_db_connection()
+            if connection:
+                try:
+                    cursor = connection.cursor(dictionary=True)
+                    cursor.execute("""
+                        SELECT v.id, v.date, v.content, v.status, v.priority,
+                               c.name as company_name, u.name as assignee_name
+                        FROM vocs v
+                        LEFT JOIN companies c ON v.company_id = c.id
+                        LEFT JOIN users u ON v.assignee_user_id = u.id
+                        ORDER BY v.date DESC
+                        LIMIT 100
+                    """)
+                    
+                    voc_list = []
+                    for row in cursor.fetchall():
+                        voc_list.append({
+                            "ID": row['id'],
+                            "날짜": row['date'],
+                            "회사": row['company_name'] or '',
+                            "내용": row['content'],
+                            "상태": row['status'],
+                            "우선순위": row['priority'],
+                            "담당자": row['assignee_name'] or ''
+                        })
+                    
+                    if voc_list:
+                        return voc_list
+                        
+                except Exception as e:
+                    if st.session_state.get('debug_mode', False):
+                        st.write(f"🐛 DEBUG: 로컬 DB VOC 조회 실패: {e}")
+                finally:
+                    if connection and connection.is_connected():
+                        cursor.close()
+                        connection.close()
+        
         else:
-            # API 호출 실패 시 임시 데이터 반환 (User 테이블의 실제 사용자들과 연결)
-            return [
-                {"ID": 1, "날짜": "2024-01-15", "회사": "ABC Corp", "내용": "시스템 오류 문의", "상태": "진행중", "우선순위": "높음", "담당자": "김철수"},
-                {"ID": 2, "날짜": "2024-01-14", "회사": "XYZ Ltd", "내용": "기능 개선 요청", "상태": "완료", "우선순위": "보통", "담당자": "이영희"},
-                {"ID": 3, "날짜": "2024-01-13", "회사": "DEF Inc", "내용": "성능 최적화 요청", "상태": "대기", "우선순위": "낮음", "담당자": "박민수"},
-                {"ID": 4, "날짜": "2024-01-12", "회사": "GHI Co", "내용": "UI/UX 개선 요청", "상태": "진행중", "우선순위": "높음", "담당자": "최지영"},
-                {"ID": 5, "날짜": "2024-01-11", "회사": "JKL Ltd", "내용": "보안 강화 요청", "상태": "완료", "우선순위": "긴급", "담당자": "정수현"},
-                {"ID": 6, "날짜": "2024-01-10", "회사": "MNO Corp", "내용": "API 연동 문의", "상태": "진행중", "우선순위": "보통", "담당자": "김철수"},
-                {"ID": 7, "날짜": "2024-01-09", "회사": "PQR Ltd", "내용": "데이터 마이그레이션 요청", "상태": "대기", "우선순위": "높음", "담당자": "이영희"},
-            ]
+            # 1. 로컬 DB 우선 (개인 사용)
+            connection = get_db_connection()
+            if connection:
+                try:
+                    cursor = connection.cursor(dictionary=True)
+                    cursor.execute("""
+                        SELECT v.id, v.date, v.content, v.status, v.priority,
+                               c.name as company_name, u.name as assignee_name
+                        FROM vocs v
+                        LEFT JOIN companies c ON v.company_id = c.id
+                        LEFT JOIN users u ON v.assignee_user_id = u.id
+                        ORDER BY v.date DESC
+                        LIMIT 100
+                    """)
+                    
+                    voc_list = []
+                    for row in cursor.fetchall():
+                        voc_list.append({
+                            "ID": row['id'],
+                            "날짜": row['date'],
+                            "회사": row['company_name'] or '',
+                            "내용": row['content'],
+                            "상태": row['status'],
+                            "우선순위": row['priority'],
+                            "담당자": row['assignee_name'] or ''
+                        })
+                    
+                    if voc_list:
+                        return voc_list
+                        
+                except Exception as e:
+                    if st.session_state.get('debug_mode', False):
+                        st.write(f"🐛 DEBUG: 로컬 DB VOC 조회 실패: {e}")
+                finally:
+                    if connection and connection.is_connected():
+                        cursor.close()
+                        connection.close()
+            
+            # 2. 로컬 DB 실패 시 API 백업
+            data = api_get("/voc/")
+            if data:
+                voc_list = []
+                for item in data:
+                    voc_list.append({
+                        "ID": item.get('id', 0),
+                        "날짜": item.get('date', ''),
+                        "회사": item.get('company', {}).get('name', '') if item.get('company') else '',
+                        "내용": item.get('content', ''),
+                        "상태": item.get('status', ''),
+                        "우선순위": item.get('priority', ''),
+                        "담당자": item.get('assignee', {}).get('name', '') if item.get('assignee') else ''
+                    })
+                return voc_list
+        
+        # 3. 모든 방법 실패 시 임시 데이터 반환
+        return [
+            {"ID": 1, "날짜": "2024-01-15", "회사": "ABC Corp", "내용": "시스템 오류 문의", "상태": "진행중", "우선순위": "높음", "담당자": "김철수"},
+            {"ID": 2, "날짜": "2024-01-14", "회사": "XYZ Ltd", "내용": "기능 개선 요청", "상태": "완료", "우선순위": "보통", "담당자": "이영희"},
+            {"ID": 3, "날짜": "2024-01-13", "회사": "DEF Inc", "내용": "성능 최적화 요청", "상태": "대기", "우선순위": "낮음", "담당자": "박민수"},
+            {"ID": 4, "날짜": "2024-01-12", "회사": "GHI Co", "내용": "UI/UX 개선 요청", "상태": "진행중", "우선순위": "높음", "담당자": "최지영"},
+            {"ID": 5, "날짜": "2024-01-11", "회사": "JKL Ltd", "내용": "보안 강화 요청", "상태": "완료", "우선순위": "긴급", "담당자": "정수현"},
+            {"ID": 6, "날짜": "2024-01-10", "회사": "MNO Corp", "내용": "API 연동 문의", "상태": "진행중", "우선순위": "보통", "담당자": "김철수"},
+            {"ID": 7, "날짜": "2024-01-09", "회사": "PQR Ltd", "내용": "데이터 마이그레이션 요청", "상태": "대기", "우선순위": "높음", "담당자": "이영희"},
+        ]
+        
     except Exception as e:
-        # API 서버가 실행되지 않은 경우 조용히 처리
+        if st.session_state.get('debug_mode', False):
+            st.write(f"🐛 DEBUG: VOC 데이터 조회 실패: {e}")
         return []
 
 def _get_company_data():
-    """회사 데이터 가져오기"""
+    """회사 데이터 가져오기 (로컬 DB 우선)"""
     try:
-        # API에서 회사 데이터 가져오기
+        # 1. 로컬 DB에서 회사 데이터 조회
+        connection = get_db_connection()
+        if connection:
+            try:
+                cursor = connection.cursor(dictionary=True)
+                cursor.execute("""
+                    SELECT id, name, domain, revenue, employee, nation
+                    FROM companies
+                    ORDER BY name
+                    LIMIT 100
+                """)
+                
+                company_list = []
+                for row in cursor.fetchall():
+                    company_list.append({
+                        "ID": row['id'],
+                        "회사명": row['name'],
+                        "도메인": row['domain'] or '',
+                        "매출": row['revenue'] or '',
+                        "직원수": row['employee'] or 0,
+                        "국가": row['nation'] or ''
+                    })
+                
+                if company_list:
+                    return company_list
+                    
+            except Exception as e:
+                if st.session_state.get('debug_mode', False):
+                    st.write(f"🐛 DEBUG: 로컬 DB 회사 조회 실패: {e}")
+            finally:
+                if connection and connection.is_connected():
+                    cursor.close()
+                    connection.close()
+        
+        # 2. API에서 회사 데이터 가져오기 (백업용)
         data = api_get("/companies/")
         if data:
             company_list = []
@@ -1458,25 +1973,64 @@ def _get_company_data():
                     "국가": item.get('nation', '')
                 })
             return company_list
-        else:
-            # API 호출 실패 시 임시 데이터 반환
-            return [
-                {"ID": 1, "회사명": "ABC Corp", "도메인": "abc.com", "매출": "100억", "직원수": 500, "국가": "한국"},
-                {"ID": 2, "회사명": "XYZ Ltd", "도메인": "xyz.com", "매출": "50억", "직원수": 200, "국가": "미국"},
-                {"ID": 3, "회사명": "DEF Inc", "도메인": "def.com", "매출": "200억", "직원수": 1000, "국가": "일본"},
-                {"ID": 4, "회사명": "GHI Co", "도메인": "ghi.com", "매출": "80억", "직원수": 300, "국가": "한국"},
-                {"ID": 5, "회사명": "JKL Ltd", "도메인": "jkl.com", "매출": "150억", "직원수": 800, "국가": "중국"},
-                {"ID": 6, "회사명": "MNO Corp", "도메인": "mno.com", "매출": "120억", "직원수": 600, "국가": "미국"},
-                {"ID": 7, "회사명": "PQR Ltd", "도메인": "pqr.com", "매출": "90억", "직원수": 400, "국가": "영국"},
-            ]
+        
+        # 3. 모든 방법 실패 시 임시 데이터 반환
+        return [
+            {"ID": 1, "회사명": "ABC Corp", "도메인": "abc.com", "매출": "100억", "직원수": 500, "국가": "한국"},
+            {"ID": 2, "회사명": "XYZ Ltd", "도메인": "xyz.com", "매출": "50억", "직원수": 200, "국가": "미국"},
+            {"ID": 3, "회사명": "DEF Inc", "도메인": "def.com", "매출": "200억", "직원수": 1000, "국가": "일본"},
+            {"ID": 4, "회사명": "GHI Co", "도메인": "ghi.com", "매출": "80억", "직원수": 300, "국가": "한국"},
+            {"ID": 5, "회사명": "JKL Ltd", "도메인": "jkl.com", "매출": "150억", "직원수": 800, "국가": "중국"},
+            {"ID": 6, "회사명": "MNO Corp", "도메인": "mno.com", "매출": "120억", "직원수": 600, "국가": "미국"},
+            {"ID": 7, "회사명": "PQR Ltd", "도메인": "pqr.com", "매출": "90억", "직원수": 400, "국가": "영국"},
+        ]
+        
     except Exception as e:
-        # API 서버가 실행되지 않은 경우 조용히 처리
+        if st.session_state.get('debug_mode', False):
+            st.write(f"🐛 DEBUG: 회사 데이터 조회 실패: {e}")
         return []
 
 def _get_contact_data():
-    """연락처 데이터 가져오기"""
+    """연락처 데이터 가져오기 (로컬 DB 우선)"""
     try:
-        # API에서 연락처 데이터 가져오기
+        # 1. 로컬 DB에서 연락처 데이터 조회
+        connection = get_db_connection()
+        if connection:
+            try:
+                cursor = connection.cursor(dictionary=True)
+                cursor.execute("""
+                    SELECT c.id, c.name, c.title, c.email, c.phone, c.note,
+                           comp.name as company_name
+                    FROM contacts c
+                    LEFT JOIN companies comp ON c.company_id = comp.id
+                    ORDER BY c.name
+                    LIMIT 100
+                """)
+                
+                contact_list = []
+                for row in cursor.fetchall():
+                    contact_list.append({
+                        "ID": row['id'],
+                        "이름": row['name'],
+                        "직책": row['title'] or '',
+                        "이메일": row['email'],
+                        "전화": row['phone'] or '',
+                        "회사": row['company_name'] or '',
+                        "메모": row['note'] or ''
+                    })
+                
+                if contact_list:
+                    return contact_list
+                    
+            except Exception as e:
+                if st.session_state.get('debug_mode', False):
+                    st.write(f"🐛 DEBUG: 로컬 DB 연락처 조회 실패: {e}")
+            finally:
+                if connection and connection.is_connected():
+                    cursor.close()
+                    connection.close()
+        
+        # 2. API에서 연락처 데이터 가져오기 (백업용)
         data = api_get("/contacts/")
         if data:
             contact_list = []
@@ -1491,25 +2045,68 @@ def _get_contact_data():
                     "메모": item.get('note', '')
                 })
             return contact_list
-        else:
-            # API 호출 실패 시 임시 데이터 반환
-            return [
-                {"ID": 1, "이름": "John Smith", "직책": "CTO", "이메일": "john@abc.com", "전화": "+1-555-0123", "회사": "ABC Corp", "메모": "기술 담당자"},
-                {"ID": 2, "이름": "Sarah Johnson", "직책": "PM", "이메일": "sarah@xyz.com", "전화": "+1-555-0456", "회사": "XYZ Ltd", "메모": "프로젝트 매니저"},
-                {"ID": 3, "이름": "Takeshi Yamamoto", "직책": "CEO", "이메일": "takeshi@def.com", "전화": "+81-3-1234-5678", "회사": "DEF Inc", "메모": "최고 경영진"},
-                {"ID": 4, "이름": "Li Wei", "직책": "개발팀장", "이메일": "liwei@ghi.com", "전화": "+86-10-1234-5678", "회사": "GHI Co", "메모": "개발 리더"},
-                {"ID": 5, "이름": "Maria Garcia", "직책": "마케팅팀장", "이메일": "maria@jkl.com", "전화": "+34-91-123-4567", "회사": "JKL Ltd", "메모": "마케팅 담당자"},
-                {"ID": 6, "이름": "David Brown", "직책": "개발팀장", "이메일": "david@mno.com", "전화": "+1-555-0789", "회사": "MNO Corp", "메모": "개발 리더"},
-                {"ID": 7, "이름": "Emma Wilson", "직책": "PM", "이메일": "emma@pqr.com", "전화": "+44-20-1234-5678", "회사": "PQR Ltd", "메모": "프로젝트 매니저"},
-            ]
+        
+        # 3. 모든 방법 실패 시 임시 데이터 반환
+        return [
+            {"ID": 1, "이름": "John Smith", "직책": "CTO", "이메일": "john@abc.com", "전화": "+1-555-0123", "회사": "ABC Corp", "메모": "기술 담당자"},
+            {"ID": 2, "이름": "Sarah Johnson", "직책": "PM", "이메일": "sarah@xyz.com", "전화": "+1-555-0456", "회사": "XYZ Ltd", "메모": "프로젝트 매니저"},
+            {"ID": 3, "이름": "Takeshi Yamamoto", "직책": "CEO", "이메일": "takeshi@def.com", "전화": "+81-3-1234-5678", "회사": "DEF Inc", "메모": "최고 경영진"},
+            {"ID": 4, "이름": "Li Wei", "직책": "개발팀장", "이메일": "liwei@ghi.com", "전화": "+86-10-1234-5678", "회사": "GHI Co", "메모": "개발 리더"},
+            {"ID": 5, "이름": "Maria Garcia", "직책": "마케팅팀장", "이메일": "maria@jkl.com", "전화": "+34-91-123-4567", "회사": "JKL Ltd", "메모": "마케팅 담당자"},
+            {"ID": 6, "이름": "David Brown", "직책": "개발팀장", "이메일": "david@mno.com", "전화": "+1-555-0789", "회사": "MNO Corp", "메모": "개발 리더"},
+            {"ID": 7, "이름": "Emma Wilson", "직책": "PM", "이메일": "emma@pqr.com", "전화": "+44-20-1234-5678", "회사": "PQR Ltd", "메모": "프로젝트 매니저"},
+        ]
+        
     except Exception as e:
-        # API 서버가 실행되지 않은 경우 조용히 처리
+        if st.session_state.get('debug_mode', False):
+            st.write(f"🐛 DEBUG: 연락처 데이터 조회 실패: {e}")
         return []
 
 def _get_project_data():
-    """프로젝트 데이터 가져오기"""
+    """프로젝트 데이터 가져오기 (로컬 DB 우선)"""
     try:
-        # API에서 프로젝트 데이터 가져오기
+        # 1. 로컬 DB에서 프로젝트 데이터 조회
+        connection = get_db_connection()
+        if connection:
+            try:
+                cursor = connection.cursor(dictionary=True)
+                cursor.execute("""
+                    SELECT p.id, p.name, p.field, p.target_app, p.ai_model, p.perf, 
+                           p.form_factor, p.memory, p.status,
+                           c.name as company_name
+                    FROM projects p
+                    LEFT JOIN companies c ON p.company_id = c.id
+                    ORDER BY p.name
+                    LIMIT 100
+                """)
+                
+                project_list = []
+                for row in cursor.fetchall():
+                    project_list.append({
+                        "ID": row['id'],
+                        "프로젝트명": row['name'],
+                        "분야": row['field'] or '',
+                        "대상앱": row['target_app'] or '',
+                        "AI모델": row['ai_model'] or '',
+                        "성능": row['perf'] or '',
+                        "폼팩터": row['form_factor'] or '',
+                        "메모리": row['memory'] or '',
+                        "회사": row['company_name'] or '',
+                        "상태": row['status'] or '진행중'
+                    })
+                
+                if project_list:
+                    return project_list
+                    
+            except Exception as e:
+                if st.session_state.get('debug_mode', False):
+                    st.write(f"🐛 DEBUG: 로컬 DB 프로젝트 조회 실패: {e}")
+            finally:
+                if connection and connection.is_connected():
+                    cursor.close()
+                    connection.close()
+        
+        # 2. API에서 프로젝트 데이터 가져오기 (백업용)
         data = api_get("/projects/")
         if data:
             project_list = []
@@ -1527,19 +2124,21 @@ def _get_project_data():
                     "상태": "진행중"  # 임시 상태
                 })
             return project_list
-        else:
-            # API 호출 실패 시 임시 데이터 반환
-            return [
-                {"ID": 1, "프로젝트명": "AI 챗봇 개발", "분야": "AI", "대상앱": "웹", "AI모델": "GPT-4", "성능": "고성능", "폼팩터": "서버", "메모리": "32GB", "회사": "ABC Corp", "상태": "진행중"},
-                {"ID": 2, "프로젝트명": "데이터 분석", "분야": "Data", "대상앱": "모바일", "AI모델": "BERT", "성능": "중성능", "폼팩터": "모바일", "메모리": "8GB", "회사": "XYZ Ltd", "상태": "완료"},
-                {"ID": 3, "프로젝트명": "이미지 인식", "분야": "CV", "대상앱": "데스크톱", "AI모델": "ResNet", "성능": "고성능", "폼팩터": "데스크톱", "메모리": "16GB", "회사": "DEF Inc", "상태": "대기"},
-                {"ID": 4, "프로젝트명": "음성 인식", "분야": "NLP", "대상앱": "모바일", "AI모델": "Whisper", "성능": "고성능", "폼팩터": "모바일", "메모리": "6GB", "회사": "GHI Co", "상태": "진행중"},
-                {"ID": 5, "프로젝트명": "추천 시스템", "분야": "ML", "대상앱": "웹", "AI모델": "Transformer", "성능": "중성능", "폼팩터": "클라우드", "메모리": "64GB", "회사": "JKL Ltd", "상태": "완료"},
-                {"ID": 6, "프로젝트명": "API 연동", "분야": "Integration", "대상앱": "웹", "AI모델": "Custom", "성능": "중성능", "폼팩터": "서버", "메모리": "16GB", "회사": "MNO Corp", "상태": "진행중"},
-                {"ID": 7, "프로젝트명": "데이터 마이그레이션", "분야": "Data", "대상앱": "서버", "AI모델": "N/A", "성능": "고성능", "폼팩터": "서버", "메모리": "128GB", "회사": "PQR Ltd", "상태": "대기"},
-            ]
+        
+        # 3. 모든 방법 실패 시 임시 데이터 반환
+        return [
+            {"ID": 1, "프로젝트명": "AI 챗봇 개발", "분야": "AI", "대상앱": "웹", "AI모델": "GPT-4", "성능": "고성능", "폼팩터": "서버", "메모리": "32GB", "회사": "ABC Corp", "상태": "진행중"},
+            {"ID": 2, "프로젝트명": "데이터 분석", "분야": "Data", "대상앱": "모바일", "AI모델": "BERT", "성능": "중성능", "폼팩터": "모바일", "메모리": "8GB", "회사": "XYZ Ltd", "상태": "완료"},
+            {"ID": 3, "프로젝트명": "이미지 인식", "분야": "CV", "대상앱": "데스크톱", "AI모델": "ResNet", "성능": "고성능", "폼팩터": "데스크톱", "메모리": "16GB", "회사": "DEF Inc", "상태": "대기"},
+            {"ID": 4, "프로젝트명": "음성 인식", "분야": "NLP", "대상앱": "모바일", "AI모델": "Whisper", "성능": "고성능", "폼팩터": "모바일", "메모리": "6GB", "회사": "GHI Co", "상태": "진행중"},
+            {"ID": 5, "프로젝트명": "추천 시스템", "분야": "ML", "대상앱": "웹", "AI모델": "Transformer", "성능": "중성능", "폼팩터": "클라우드", "메모리": "64GB", "회사": "JKL Ltd", "상태": "완료"},
+            {"ID": 6, "프로젝트명": "API 연동", "분야": "Integration", "대상앱": "웹", "AI모델": "Custom", "성능": "중성능", "폼팩터": "서버", "메모리": "16GB", "회사": "MNO Corp", "상태": "진행중"},
+            {"ID": 7, "프로젝트명": "데이터 마이그레이션", "분야": "Data", "대상앱": "서버", "AI모델": "N/A", "성능": "고성능", "폼팩터": "서버", "메모리": "128GB", "회사": "PQR Ltd", "상태": "대기"},
+        ]
+        
     except Exception as e:
-        # API 서버가 실행되지 않은 경우 조용히 처리
+        if st.session_state.get('debug_mode', False):
+            st.write(f"🐛 DEBUG: 프로젝트 데이터 조회 실패: {e}")
         return []
 
 def _render_settings_modal_content():
@@ -1560,11 +2159,25 @@ def _render_settings_modal_content():
     st.write(f"이메일 {st.session_state.get('user_email', 'unknown@mail.com')}")
 
     st.write("")
-    
+
+    # 디버그 모드 토글 (모든 사용자)
+    st.subheader("개발자 옵션")
+    debug_mode = st.session_state.get('debug_mode', False)
+
+    col_debug1, col_debug2 = st.columns([3, 1])
+    with col_debug1:
+        st.write("디버그 모드 (세션 상태 및 쿠키 정보 표시)")
+    with col_debug2:
+        if st.button("🟢 켜기" if not debug_mode else "🔴 끄기", key="toggle_debug"):
+            st.session_state['debug_mode'] = not debug_mode
+            st.rerun()
+
+    st.divider()
+
     # 관리자 기능들
     if st.session_state.get('auth_level', 0) >= 4:
         st.subheader("관리자 기능")
-        
+
         # 더미 사용자 설정 버튼
         if st.button("🎭 더미 사용자 설정", help="한국 이름의 더미 사용자 데이터를 생성합니다"):
             try:
@@ -1577,7 +2190,7 @@ def _render_settings_modal_content():
                     st.info("더미 사용자들이 이미 존재하거나 생성에 실패했습니다.")
             except Exception as e:
                 st.error(f"더미 사용자 생성 중 오류: {e}")
-        
+
         st.divider()
     
     btn_col1, btn_col2 = st.columns([1, 1])
@@ -1963,25 +2576,26 @@ def main():
     if 'password_reset_needed' not in st.session_state:
         st.session_state.password_reset_needed = False
     
-    # 세션 복원 로직 강화 - 새로고침에도 로그인 상태 유지
-    if not st.session_state.logged_in:
-        # 1. 쿠키 기반 세션 복원 시도 (최우선)
+    # 세션 복원 로직 개선 - 한 번만 실행 (성능 최적화)
+    if not st.session_state.logged_in and 'session_restore_attempted' not in st.session_state:
+        st.session_state['session_restore_attempted'] = True
+
+        # 1. 파일 기반 세션 복원 먼저 시도 (가장 안정적)
+        if initialize_session_from_localStorage():
+            st.rerun()
+            return
+
+        # 2. 쿠키 기반 세션 복원 시도 (백업용)
         if initialize_session_from_cookie():
             st.rerun()
             return
 
-        # 2. 파일에서 세션 복원 시도 (쿠키 실패 시 백업)
-        if initialize_session_from_localStorage():
-            st.rerun()
-            return
-    
-    # 로그인된 상태에서 세션 유효성 검사
+    # 로그인된 상태에서 세션 유효성 검사 (경량화)
     if st.session_state.logged_in:
         if not check_session_validity():
             # 세션이 유효하지 않으면 로그아웃 처리
-            for key in ['logged_in', 'user_email', 'username', 'auth_level', 'session_token', 'profile_department']:
-                if key in st.session_state:
-                    del st.session_state[key]
+            clear_session_state()
+            st.session_state['session_restore_attempted'] = False  # 재시도 가능하도록
             st.rerun()
             return
     

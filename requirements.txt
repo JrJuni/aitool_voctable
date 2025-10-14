@@ -8,6 +8,7 @@ starlette==0.48.0
 SQLAlchemy==2.0.43
 alembic==1.16.5
 PyMySQL==1.1.2
+mysql-connector-python==9.4.0
 
 # Authentication & Security
 PyJWT==2.10.1

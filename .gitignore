@@ -244,6 +244,10 @@ voc_table/frontend/user_data.json.bak
 voc_table/frontend/.sessions/
 voc_table/frontend/.sessions/*
 
+# VOC Table security files (쿠키 암호화 키)
+voc_table/frontend/.cookie_secret_key
+**/.cookie_secret_key
+
 # VOC Table backup files
 *.bak
 *.backup
