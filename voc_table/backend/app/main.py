@@ -1008,35 +1008,35 @@ async def setup_dummy_users(
     dummy_users = [
         {
             "email": "kim.chulsoo@mobilint.com",
-            "name": "김철수",
+            "username": "김철수",
             "password": "0000",
             "auth_level": 1,
             "is_active": True
         },
         {
             "email": "lee.younghee@mobilint.com", 
-            "name": "이영희",
+            "username": "이영희",
             "password": "0000",
             "auth_level": 2,
             "is_active": True
         },
         {
             "email": "park.minsu@mobilint.com",
-            "name": "박민수", 
+            "username": "박민수", 
             "password": "0000",
             "auth_level": 3,
             "is_active": True
         },
         {
             "email": "choi.jiyoung@mobilint.com",
-            "name": "최지영",
+            "username": "최지영",
             "password": "0000",
             "auth_level": 2,
             "is_active": True
         },
         {
             "email": "jung.suhyun@mobilint.com",
-            "name": "정수현",
+            "username": "정수현",
             "password": "0000",
             "auth_level": 1,
             "is_active": True
@@ -1053,7 +1053,7 @@ async def setup_dummy_users(
     if existing_dummy_users:
         return {
             "message": "일부 더미 사용자들이 이미 존재합니다",
-            "existing_users": [{"id": user.id, "name": user.name, "email": user.email, "auth_level": user.auth_level} for user in existing_dummy_users],
+            "existing_users": [{"id": user.id, "username": user.username, "email": user.email, "auth_level": user.auth_level} for user in existing_dummy_users],
             "created_users": []
         }
     
@@ -1065,8 +1065,208 @@ async def setup_dummy_users(
     
     return {
         "message": f"{len(created_users)}명의 더미 사용자가 생성되었습니다",
-        "created_users": [{"id": user.id, "name": user.name, "email": user.email, "auth_level": user.auth_level} for user in created_users]
+        "created_users": [{"id": user.id, "username": user.username, "email": user.email, "auth_level": user.auth_level} for user in created_users]
     }
+
+@app.post("/admin/setup-sample-data")
+async def setup_sample_data(
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(require_auth_level(4)),  # 레벨 4 이상만 가능
+    request: Request = None
+):
+    """샘플 데이터 생성 (회사, 연락처, 프로젝트, VOC)"""
+    ip = get_client_ip(request) if request else None
+    
+    try:
+        # 기존 샘플 데이터 확인
+        existing_companies = crud.get_companies(db, skip=0, limit=1)
+        if existing_companies:
+            return {
+                "message": "샘플 데이터가 이미 존재합니다",
+                "existing_data": True
+            }
+        
+        # 1. 샘플 회사 데이터 생성
+        sample_companies = [
+            {
+                "name": "삼성전자",
+                "domain": "samsung.com",
+                "revenue": "1000억",
+                "employee": 50000,
+                "nation": "한국"
+            },
+            {
+                "name": "LG전자",
+                "domain": "lg.com", 
+                "revenue": "500억",
+                "employee": 25000,
+                "nation": "한국"
+            },
+            {
+                "name": "SK하이닉스",
+                "domain": "skhynix.com",
+                "revenue": "300억",
+                "employee": 15000,
+                "nation": "한국"
+            }
+        ]
+        
+        created_companies = []
+        for company_data in sample_companies:
+            company_create = schemas.CompanyCreate(**company_data)
+            company = crud.create_company(db=db, company=company_create, user_id=current_user.id, ip=ip)
+            created_companies.append(company)
+        
+        # 2. 샘플 연락처 데이터 생성
+        sample_contacts = [
+            {
+                "name": "김대리",
+                "title": "대리",
+                "email": "kim.daeri@samsung.com",
+                "phone": "010-1234-5678",
+                "note": "삼성전자 담당자",
+                "company_id": created_companies[0].id
+            },
+            {
+                "name": "이과장",
+                "title": "과장",
+                "email": "lee.gwajang@lg.com",
+                "phone": "010-2345-6789",
+                "note": "LG전자 담당자",
+                "company_id": created_companies[1].id
+            },
+            {
+                "name": "박부장",
+                "title": "부장",
+                "email": "park.bujang@skhynix.com",
+                "phone": "010-3456-7890",
+                "note": "SK하이닉스 담당자",
+                "company_id": created_companies[2].id
+            }
+        ]
+        
+        created_contacts = []
+        for contact_data in sample_contacts:
+            contact_create = schemas.ContactCreate(**contact_data)
+            contact = crud.create_contact(db=db, contact=contact_create, user_id=current_user.id, ip=ip)
+            created_contacts.append(contact)
+        
+        # 3. 샘플 프로젝트 데이터 생성
+        sample_projects = [
+            {
+                "name": "AI 칩 개발 프로젝트",
+                "field": "AI",
+                "target_app": "스마트폰",
+                "ai_model": "GPT-4",
+                "perf": "100 TOPS",
+                "power": "5W",
+                "form_factor": "SoC",
+                "memory": "16GB",
+                "price": "100만원",
+                "requirements": "고성능 AI 추론",
+                "competitors": "퀄컴, 애플",
+                "result": "성공",
+                "root_cause": "기술력 부족",
+                "company_id": created_companies[0].id
+            },
+            {
+                "name": "스마트홈 솔루션",
+                "field": "IoT",
+                "target_app": "스마트홈",
+                "ai_model": "BERT",
+                "perf": "50 TOPS",
+                "power": "2W",
+                "form_factor": "모듈",
+                "memory": "8GB",
+                "price": "50만원",
+                "requirements": "에너지 효율성",
+                "competitors": "아마존, 구글",
+                "result": "진행중",
+                "root_cause": "가격 경쟁력",
+                "company_id": created_companies[1].id
+            }
+        ]
+        
+        created_projects = []
+        for project_data in sample_projects:
+            project_create = schemas.ProjectCreate(**project_data)
+            project = crud.create_project(db=db, project=project_create, user_id=current_user.id, ip=ip)
+            created_projects.append(project)
+        
+        # 4. 샘플 VOC 데이터 생성 (사용자별로 할당)
+        # 사용자 ID 조회
+        users = crud.get_users(db, skip=0, limit=10)
+        user_ids = [user.id for user in users if user.auth_level > 0]
+        
+        if not user_ids:
+            return {
+                "message": "사용자가 없어 VOC 데이터를 생성할 수 없습니다",
+                "error": "No users found"
+            }
+        
+        sample_vocs = [
+            {
+                "date": "2024-01-15",
+                "content": "AI 칩 성능이 기대보다 낮습니다. 개선이 필요합니다.",
+                "action_item": "성능 최적화 작업 진행",
+                "due_date": "2024-02-15",
+                "status": "in_progress",
+                "priority": "high",
+                "assignee_user_id": user_ids[0] if len(user_ids) > 0 else 1,
+                "company_id": created_companies[0].id,
+                "contact_id": created_contacts[0].id,
+                "project_id": created_projects[0].id,
+                "ai_summary": "AI 칩 성능 개선 요청"
+            },
+            {
+                "date": "2024-01-20",
+                "content": "스마트홈 솔루션의 가격이 너무 비쌉니다.",
+                "action_item": "가격 재검토 및 조정",
+                "due_date": "2024-02-20",
+                "status": "pending",
+                "priority": "medium",
+                "assignee_user_id": user_ids[1] if len(user_ids) > 1 else user_ids[0],
+                "company_id": created_companies[1].id,
+                "contact_id": created_contacts[1].id,
+                "project_id": created_projects[1].id,
+                "ai_summary": "가격 경쟁력 개선 요청"
+            },
+            {
+                "date": "2024-01-25",
+                "content": "메모리 용량이 부족합니다. 확장이 필요합니다.",
+                "action_item": "메모리 용량 확장 검토",
+                "due_date": "2024-02-25",
+                "status": "in_progress",
+                "priority": "high",
+                "assignee_user_id": user_ids[2] if len(user_ids) > 2 else user_ids[0],
+                "company_id": created_companies[2].id,
+                "contact_id": created_contacts[2].id,
+                "project_id": None,
+                "ai_summary": "메모리 용량 확장 요청"
+            }
+        ]
+        
+        created_vocs = []
+        for voc_data in sample_vocs:
+            voc_create = schemas.VOCCreate(**voc_data)
+            voc = crud.create_voc(db=db, voc=voc_create, user_id=current_user.id, ip=ip)
+            created_vocs.append(voc)
+        
+        return {
+            "message": "샘플 데이터가 성공적으로 생성되었습니다",
+            "created_data": {
+                "companies": len(created_companies),
+                "contacts": len(created_contacts),
+                "projects": len(created_projects),
+                "vocs": len(created_vocs)
+            }
+        }
+        
+    except Exception as e:
+        return {
+            "message": f"샘플 데이터 생성 중 오류가 발생했습니다: {str(e)}",
+            "error": str(e)
+        }
 
 # =============================================================================
 # VOC 관련 엔드포인트
@@ -1219,6 +1419,12 @@ async def update_voc(
     ip = get_client_ip(request) if request else None
     voc = crud.update_voc(db=db, voc_id=voc_id, voc_update=voc_update, user_id=current_user.id, ip=ip)
     if voc is None:
+        # 권한 검증 실패 또는 VOC가 존재하지 않음
+        if not crud.check_voc_edit_permission(db, voc_id, current_user.id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions to edit this VOC"
+            )
         raise HTTPException(status_code=404, detail="VOC not found")
     return voc
 
@@ -1332,6 +1538,12 @@ async def update_company(
     ip = get_client_ip(request) if request else None
     company = crud.update_company(db=db, company_id=company_id, company_update=company_update, user_id=current_user.id, ip=ip)
     if company is None:
+        # 권한 검증 실패 또는 회사가 존재하지 않음
+        if not crud.check_company_edit_permission(db, company_id, current_user.id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions to edit this company"
+            )
         raise HTTPException(status_code=404, detail="Company not found")
     return company
 
@@ -1416,6 +1628,12 @@ async def update_contact(
     ip = get_client_ip(request) if request else None
     contact = crud.update_contact(db=db, contact_id=contact_id, contact_update=contact_update, user_id=current_user.id, ip=ip)
     if contact is None:
+        # 권한 검증 실패 또는 연락처가 존재하지 않음
+        if not crud.check_contact_edit_permission(db, contact_id, current_user.id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions to edit this contact"
+            )
         raise HTTPException(status_code=404, detail="Contact not found")
     return contact
 
@@ -1500,6 +1718,12 @@ async def update_project(
     ip = get_client_ip(request) if request else None
     project = crud.update_project(db=db, project_id=project_id, project_update=project_update, user_id=current_user.id, ip=ip)
     if project is None:
+        # 권한 검증 실패 또는 프로젝트가 존재하지 않음
+        if not crud.check_project_edit_permission(db, project_id, current_user.id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions to edit this project"
+            )
         raise HTTPException(status_code=404, detail="Project not found")
     return project
 

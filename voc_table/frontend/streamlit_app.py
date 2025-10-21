@@ -12,6 +12,7 @@ from typing import Optional, Dict, Any
 import streamlit_cookies_manager as cookies_manager
 import mysql.connector
 from mysql.connector import Error
+import pandas as pd
 
 # Streamlit cache deprecation 경고 억제
 warnings.filterwarnings("ignore", message=".*st.cache.*", category=FutureWarning)
@@ -1141,6 +1142,365 @@ def voc_table_page():
 
     # 디버그 정보 표시
     debug_session_status()
+    
+    # 탭 생성
+    tab1, tab2, tab3 = st.tabs(["📋 VOC 목록", "✏️ 테이블 편집", "📊 통계"])
+    
+    with tab1:
+        show_voc_list()
+    
+    with tab2:
+        show_table_editor()
+    
+    with tab3:
+        show_voc_statistics()
+
+def show_voc_list():
+    """VOC 목록 표시"""
+    # 기존 VOC 목록 표시 로직을 여기로 이동
+    if st.session_state.get('auth_level', 0) >= 2:
+        # lv2 이상 사용자는 모든 탭 표시
+        tab1, tab2, tab3, tab4 = st.tabs(["📋 VOC", "🏢 회사", "👥 연락처", "📁 프로젝트"])
+        
+        with tab1:
+            _render_voc_tab()
+        
+        with tab2:
+            _render_company_tab()
+        
+        with tab3:
+            _render_contact_tab()
+        
+        with tab4:
+            _render_project_tab()
+    else:
+        # lv1 사용자는 VOC만 표시
+        _render_voc_tab()
+
+def show_table_editor():
+    """테이블 편집 기능"""
+    st.subheader("✏️ 테이블 편집")
+    
+    # 사용자 권한 확인
+    user_level = st.session_state.get('auth_level', 0)
+    st.info(f"현재 권한 레벨: {user_level} | 편집 가능한 데이터: {'본인 데이터만' if user_level <= 2 else '자기 레벨 이하 유저 데이터'}")
+    
+    # 편집할 테이블 선택
+    table_type = st.selectbox(
+        "편집할 테이블을 선택하세요:",
+        ["VOC", "회사", "연락처", "프로젝트"],
+        key="table_editor_type"
+    )
+    
+    if table_type == "VOC":
+        edit_voc_table()
+    elif table_type == "회사":
+        edit_company_table()
+    elif table_type == "연락처":
+        edit_contact_table()
+    elif table_type == "프로젝트":
+        edit_project_table()
+
+def show_voc_statistics():
+    """VOC 통계 표시"""
+    st.subheader("📊 VOC 통계")
+    
+    # 관리자 기능
+    user_level = st.session_state.get('auth_level', 0)
+    if user_level >= 4:
+        st.subheader("🔧 관리자 기능")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("👥 더미 사용자 생성", type="secondary"):
+                create_dummy_users()
+        
+        with col2:
+            if st.button("📊 샘플 데이터 생성", type="secondary"):
+                create_sample_data()
+        
+        with col3:
+            if st.button("🔄 데이터 새로고침", type="secondary"):
+                st.rerun()
+    
+    st.info("통계 기능은 추후 구현 예정입니다.")
+
+def create_dummy_users():
+    """더미 사용자 생성"""
+    try:
+        token = st.session_state.get('session_token')
+        if not token:
+            st.error("인증 토큰이 없습니다.")
+            return
+        
+        headers = {
+            'Authorization': f'Bearer {token}',
+            'Content-Type': 'application/json'
+        }
+        
+        response = requests.post(
+            f"{API_BASE_URL}/admin/setup-dummy-users",
+            headers=headers
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            st.success(result.get('message', '더미 사용자가 생성되었습니다.'))
+            if 'created_users' in result and result['created_users']:
+                st.write("생성된 사용자:")
+                for user in result['created_users']:
+                    st.write(f"- {user['username']} ({user['email']}) - Level {user['auth_level']}")
+        else:
+            st.error(f"더미 사용자 생성 실패: {response.text}")
+            
+    except Exception as e:
+        st.error(f"API 호출 중 오류: {str(e)}")
+
+def create_sample_data():
+    """샘플 데이터 생성"""
+    try:
+        token = st.session_state.get('session_token')
+        if not token:
+            st.error("인증 토큰이 없습니다.")
+            return
+        
+        headers = {
+            'Authorization': f'Bearer {token}',
+            'Content-Type': 'application/json'
+        }
+        
+        response = requests.post(
+            f"{API_BASE_URL}/admin/setup-sample-data",
+            headers=headers
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            st.success(result.get('message', '샘플 데이터가 생성되었습니다.'))
+            if 'created_data' in result:
+                data = result['created_data']
+                st.write(f"생성된 데이터: 회사 {data['companies']}개, 연락처 {data['contacts']}개, 프로젝트 {data['projects']}개, VOC {data['vocs']}개")
+        else:
+            st.error(f"샘플 데이터 생성 실패: {response.text}")
+            
+    except Exception as e:
+        st.error(f"API 호출 중 오류: {str(e)}")
+
+def edit_voc_table():
+    """VOC 테이블 편집"""
+    st.subheader("📋 VOC 테이블 편집")
+    
+    # VOC 데이터 로드
+    try:
+        voc_data = load_voc_data()
+        if not voc_data:
+            st.warning("VOC 데이터를 불러올 수 없습니다.")
+            return
+        
+        # 권한에 따른 데이터 필터링
+        user_level = st.session_state.get('auth_level', 0)
+        user_id = st.session_state.get('user_id', 0)
+        
+        if user_level <= 2:
+            # 레벨 2 이하: 본인 데이터만 표시
+            filtered_data = [voc for voc in voc_data if voc.get('assignee_user_id') == user_id]
+            st.info(f"본인 데이터만 표시됩니다. (총 {len(filtered_data)}개)")
+        else:
+            # 레벨 3 이상: 모든 데이터 표시
+            filtered_data = voc_data
+            st.info(f"모든 데이터가 표시됩니다. (총 {len(filtered_data)}개)")
+        
+        if not filtered_data:
+            st.warning("편집 가능한 VOC 데이터가 없습니다.")
+            return
+        
+        # 데이터프레임 생성
+        df = pd.DataFrame(filtered_data)
+        
+        # 편집 가능한 컬럼 설정
+        column_config = {
+            "ID": st.column_config.NumberColumn("ID", width=50, disabled=True),
+            "날짜": st.column_config.DateColumn("날짜", width=100),
+            "내용": st.column_config.TextColumn("내용", width=300),
+            "액션아이템": st.column_config.TextColumn("액션아이템", width=200),
+            "마감일": st.column_config.DateColumn("마감일", width=100),
+            "상태": st.column_config.SelectboxColumn(
+                "상태", 
+                options=["pending", "in_progress", "done", "on_hold"],
+                width=100
+            ),
+            "우선순위": st.column_config.SelectboxColumn(
+                "우선순위",
+                options=["low", "medium", "high", "urgent"],
+                width=100
+            ),
+            "담당자": st.column_config.TextColumn("담당자", width=100, disabled=True),
+            "회사명": st.column_config.TextColumn("회사명", width=150, disabled=True),
+            "연락처": st.column_config.TextColumn("연락처", width=100, disabled=True),
+            "프로젝트명": st.column_config.TextColumn("프로젝트명", width=150, disabled=True),
+            "AI요약": st.column_config.TextColumn("AI요약", width=200, disabled=True)
+        }
+        
+        # 데이터 편집기 표시
+        edited_df = st.data_editor(
+            df,
+            column_config=column_config,
+            num_rows="dynamic",
+            use_container_width=True,
+            key="voc_editor"
+        )
+        
+        # 저장 버튼
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col2:
+            if st.button("💾 변경사항 저장", type="primary"):
+                save_voc_changes(edited_df, df)
+        
+    except Exception as e:
+        st.error(f"VOC 데이터 로드 중 오류가 발생했습니다: {str(e)}")
+
+def edit_company_table():
+    """회사 테이블 편집"""
+    st.subheader("🏢 회사 테이블 편집")
+    
+    # 회사 데이터 로드
+    try:
+        company_data = load_company_data()
+        if not company_data:
+            st.warning("회사 데이터를 불러올 수 없습니다.")
+            return
+        
+        # 데이터프레임 생성
+        df = pd.DataFrame(company_data)
+        
+        # 편집 가능한 컬럼 설정
+        column_config = {
+            "ID": st.column_config.NumberColumn("ID", width=50, disabled=True),
+            "회사명": st.column_config.TextColumn("회사명", width=200),
+            "도메인": st.column_config.TextColumn("도메인", width=150),
+            "매출": st.column_config.TextColumn("매출", width=100),
+            "직원수": st.column_config.NumberColumn("직원수", width=80),
+            "국가": st.column_config.TextColumn("국가", width=100),
+            "생성일": st.column_config.DatetimeColumn("생성일", width=120, disabled=True),
+            "수정일": st.column_config.DatetimeColumn("수정일", width=120, disabled=True)
+        }
+        
+        # 데이터 편집기 표시
+        edited_df = st.data_editor(
+            df,
+            column_config=column_config,
+            num_rows="dynamic",
+            use_container_width=True,
+            key="company_editor"
+        )
+        
+        # 저장 버튼
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col2:
+            if st.button("💾 변경사항 저장", type="primary"):
+                save_company_changes(edited_df, df)
+        
+    except Exception as e:
+        st.error(f"회사 데이터 로드 중 오류가 발생했습니다: {str(e)}")
+
+def edit_contact_table():
+    """연락처 테이블 편집"""
+    st.subheader("👥 연락처 테이블 편집")
+    
+    # 연락처 데이터 로드
+    try:
+        contact_data = load_contact_data()
+        if not contact_data:
+            st.warning("연락처 데이터를 불러올 수 없습니다.")
+            return
+        
+        # 데이터프레임 생성
+        df = pd.DataFrame(contact_data)
+        
+        # 편집 가능한 컬럼 설정
+        column_config = {
+            "ID": st.column_config.NumberColumn("ID", width=50, disabled=True),
+            "이름": st.column_config.TextColumn("이름", width=100),
+            "직책": st.column_config.TextColumn("직책", width=100),
+            "이메일": st.column_config.TextColumn("이메일", width=200),
+            "전화번호": st.column_config.TextColumn("전화번호", width=120),
+            "메모": st.column_config.TextColumn("메모", width=200),
+            "회사명": st.column_config.TextColumn("회사명", width=150, disabled=True),
+            "생성일": st.column_config.DatetimeColumn("생성일", width=120, disabled=True),
+            "수정일": st.column_config.DatetimeColumn("수정일", width=120, disabled=True)
+        }
+        
+        # 데이터 편집기 표시
+        edited_df = st.data_editor(
+            df,
+            column_config=column_config,
+            num_rows="dynamic",
+            use_container_width=True,
+            key="contact_editor"
+        )
+        
+        # 저장 버튼
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col2:
+            if st.button("💾 변경사항 저장", type="primary"):
+                save_contact_changes(edited_df, df)
+        
+    except Exception as e:
+        st.error(f"연락처 데이터 로드 중 오류가 발생했습니다: {str(e)}")
+
+def edit_project_table():
+    """프로젝트 테이블 편집"""
+    st.subheader("📁 프로젝트 테이블 편집")
+    
+    # 프로젝트 데이터 로드
+    try:
+        project_data = load_project_data()
+        if not project_data:
+            st.warning("프로젝트 데이터를 불러올 수 없습니다.")
+            return
+        
+        # 데이터프레임 생성
+        df = pd.DataFrame(project_data)
+        
+        # 편집 가능한 컬럼 설정
+        column_config = {
+            "ID": st.column_config.NumberColumn("ID", width=50, disabled=True),
+            "프로젝트명": st.column_config.TextColumn("프로젝트명", width=200),
+            "분야": st.column_config.TextColumn("분야", width=100),
+            "대상앱": st.column_config.TextColumn("대상앱", width=150),
+            "AI모델": st.column_config.TextColumn("AI모델", width=150),
+            "성능": st.column_config.TextColumn("성능", width=100),
+            "전력": st.column_config.TextColumn("전력", width=100),
+            "폼팩터": st.column_config.TextColumn("폼팩터", width=100),
+            "메모리": st.column_config.TextColumn("메모리", width=100),
+            "가격": st.column_config.TextColumn("가격", width=100),
+            "요구사항": st.column_config.TextColumn("요구사항", width=200),
+            "경쟁사": st.column_config.TextColumn("경쟁사", width=150),
+            "결과": st.column_config.TextColumn("결과", width=150),
+            "근본원인": st.column_config.TextColumn("근본원인", width=150),
+            "회사명": st.column_config.TextColumn("회사명", width=150, disabled=True),
+            "생성일": st.column_config.DatetimeColumn("생성일", width=120, disabled=True),
+            "수정일": st.column_config.DatetimeColumn("수정일", width=120, disabled=True)
+        }
+        
+        # 데이터 편집기 표시
+        edited_df = st.data_editor(
+            df,
+            column_config=column_config,
+            num_rows="dynamic",
+            use_container_width=True,
+            key="project_editor"
+        )
+        
+        # 저장 버튼
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col2:
+            if st.button("💾 변경사항 저장", type="primary"):
+                save_project_changes(edited_df, df)
+        
+    except Exception as e:
+        st.error(f"프로젝트 데이터 로드 중 오류가 발생했습니다: {str(e)}")
 
     # 상단 사용자 정보 (우측 정렬, 버튼 간 간격 축소)
     top_left, top_settings, top_logout = st.columns([6.8, 1.0, 1.4])
@@ -1243,17 +1603,23 @@ def _render_voc_tab():
     """VOC 탭 렌더링"""
     st.subheader("VOC 목록")
     
-    # 테이블 헤더 가운데 정렬을 위한 경량 CSS 주입
+    # 엑셀 스타일 필터링 안내
+    st.info("💡 **엑셀 스타일 필터링**: 아래 필터를 사용하여 데이터를 필터링할 수 있습니다. 편집 모드에서는 데이터를 직접 수정할 수도 있습니다.")
+    
+    # 엑셀 스타일 테이블을 위한 CSS 주입
     st.markdown(
         """
         <style>
-        /* st.dataframe 헤더 가운데 정렬 */
-        div[data-testid="stDataFrame"] thead tr th div {
+        /* st.dataframe과 st.dataeditor 헤더 가운데 정렬 */
+        div[data-testid="stDataFrame"] thead tr th div,
+        div[data-testid="stDataEditor"] thead tr th div {
             display: flex; justify-content: center; align-items: center;
         }
-        div[data-testid="stDataFrame"] thead tr th {
+        div[data-testid="stDataFrame"] thead tr th,
+        div[data-testid="stDataEditor"] thead tr th {
             text-align: center !important;
         }
+        
         /* 버튼 텍스트 줄바꿈 방지 및 반응형 폰트/패딩 */
         div.stButton > button { white-space: nowrap; width: 100%; }
         @media (max-width: 1400px) {
@@ -1271,12 +1637,25 @@ def _render_voc_tab():
             display: none !important;
         }
         
-        /* 편집 모드 시각적 개선 */
+        /* 엑셀 스타일 테이블 디자인 */
         div[data-testid="stDataEditor"] {
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            background-color: #ffffff;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+        
+        /* 편집 모드 시각적 개선 */
+        div[data-testid="stDataEditor"]:has(input:not([disabled])) {
             border: 2px solid #ff6b6b;
-            border-radius: 8px;
-            padding: 10px;
             background-color: #fff5f5;
+        }
+        
+        /* 필터링 가능한 헤더 스타일 */
+        div[data-testid="stDataEditor"] thead tr th {
+            background-color: #f8fafc !important;
+            border-bottom: 2px solid #e5e7eb !important;
+            font-weight: 600 !important;
         }
         
         /* 편집 중인 셀 하이라이트 */
@@ -1286,9 +1665,40 @@ def _render_voc_tab():
             box-shadow: 0 0 5px rgba(78, 205, 196, 0.5) !important;
         }
         
-        /* 편집된 행 하이라이트 */
-        div[data-testid="stDataEditor"] tr:hover {
+        /* 행 호버 효과 */
+        div[data-testid="stDataEditor"] tbody tr:hover {
             background-color: #f0f8ff !important;
+        }
+        
+        /* 읽기 전용 모드 스타일 */
+        div[data-testid="stDataEditor"][data-disabled="true"] {
+            border: 1px solid #d1d5db;
+            background-color: #f9fafb;
+        }
+        
+        /* 필터 토글 스타일 */
+        .stExpander[data-testid="stExpander"] {
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+        }
+        
+        .stExpander[data-testid="stExpander"] > div[data-testid="stExpanderContent"] {
+            background-color: #f8fafc;
+            padding: 1rem;
+        }
+        
+        /* 필터 입력 필드 스타일 */
+        div[data-testid="stTextInput"] input,
+        div[data-testid="stSelectbox"] select {
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+        }
+        
+        /* 필터 버튼 스타일 */
+        div[data-testid="stButton"] button {
+            border-radius: 6px;
+            font-weight: 500;
         }
         </style>
         """,
@@ -1298,19 +1708,119 @@ def _render_voc_tab():
     # VOC 데이터 가져오기 (API 호출)
     voc_data = _get_voc_data()
     
+    # 샘플 데이터가 있으면 추가
+    if 'sample_voc_data' in st.session_state and st.session_state.sample_voc_data:
+        voc_data.extend(st.session_state.sample_voc_data)
+    
     # DataFrame으로 변환 후 컬럼 폭 조정
     import pandas as pd
     df = pd.DataFrame(voc_data)
 
-    # 편집 모드일 때 편집 가능한 테이블 표시
+    # 사용자 목록 가져오기 (필터링용)
+    users = _get_users_list()
+    user_names = [user.get('name', '') for user in users if user.get('name')]
+    
+    # 엑셀 스타일 컬럼별 필터 추가 (토글로 변경)
+    if not df.empty:
+        # 필터 토글
+        with st.expander("🔍 컬럼별 필터", expanded=False):
+            # 8개 컬럼에 맞춰 필터 배치 (2행으로 구성)
+            filter_cols_row1 = st.columns(4)
+            filter_cols_row2 = st.columns(4)
+            
+            with filter_cols_row1[0]:  # ID
+                id_filter = st.text_input("ID", placeholder="ID 검색", key="filter_id")
+            
+            with filter_cols_row1[1]:  # 날짜
+                date_filter = st.text_input("날짜", placeholder="날짜 검색", key="filter_date")
+            
+            with filter_cols_row1[2]:  # 회사
+                company_options = ["전체"] + sorted(df['회사'].dropna().unique().tolist())
+                company_filter = st.selectbox("회사", company_options, key="filter_company")
+            
+            with filter_cols_row1[3]:  # 내용
+                content_filter = st.text_input("내용", placeholder="내용 검색", key="filter_content")
+            
+            with filter_cols_row2[0]:  # 상태
+                status_options = ["전체"] + sorted(df['상태'].dropna().unique().tolist())
+                status_filter = st.selectbox("상태", status_options, key="filter_status")
+            
+            with filter_cols_row2[1]:  # 우선순위
+                priority_options = ["전체"] + sorted(df['우선순위'].dropna().unique().tolist())
+                priority_filter = st.selectbox("우선순위", priority_options, key="filter_priority")
+            
+            with filter_cols_row2[2]:  # 담당자
+                assignee_options = ["전체"] + sorted(df['담당자'].dropna().unique().tolist())
+                assignee_filter = st.selectbox("담당자", assignee_options, key="filter_assignee")
+            
+            with filter_cols_row2[3]:  # 연관ID
+                related_id_filter = st.text_input("연관ID", placeholder="연관ID 검색", key="filter_related_id")
+            
+            # 필터 제어 버튼
+            st.markdown("---")
+            col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 8])
+            with col_btn1:
+                if st.button("🗑️ 필터 초기화", key="clear_all_filters"):
+                    # 모든 필터 초기화
+                    for key in ["filter_id", "filter_date", "filter_company", "filter_content", 
+                               "filter_status", "filter_priority", "filter_assignee", "filter_related_id"]:
+                        if key in st.session_state:
+                            del st.session_state[key]
+                    st.rerun()
+            
+            with col_btn2:
+                if st.button("🔄 새로고침", key="refresh_data"):
+                    st.rerun()
+            
+            # 필터링 로직 적용
+            filtered_df = df.copy()
+            
+            # ID 필터
+            if id_filter:
+                filtered_df = filtered_df[filtered_df['ID'].astype(str).str.contains(id_filter, na=False)]
+            
+            # 날짜 필터
+            if date_filter:
+                filtered_df = filtered_df[filtered_df['날짜'].astype(str).str.contains(date_filter, na=False)]
+            
+            # 회사 필터
+            if company_filter != "전체":
+                filtered_df = filtered_df[filtered_df['회사'] == company_filter]
+            
+            # 내용 필터
+            if content_filter:
+                filtered_df = filtered_df[filtered_df['내용'].astype(str).str.contains(content_filter, na=False, case=False)]
+            
+            # 상태 필터
+            if status_filter != "전체":
+                filtered_df = filtered_df[filtered_df['상태'] == status_filter]
+            
+            # 우선순위 필터
+            if priority_filter != "전체":
+                filtered_df = filtered_df[filtered_df['우선순위'] == priority_filter]
+            
+            # 담당자 필터
+            if assignee_filter != "전체":
+                filtered_df = filtered_df[filtered_df['담당자'] == assignee_filter]
+            
+            # 연관ID 필터
+            if related_id_filter:
+                filtered_df = filtered_df[filtered_df['연관ID'].astype(str).str.contains(related_id_filter, na=False)]
+            
+            # 필터링 결과 표시
+            if len(filtered_df) != len(df):
+                st.success(f"🔍 필터 적용 결과: {len(filtered_df)}개 / {len(df)}개 VOC")
+            
+            # 필터링된 데이터로 테이블 표시
+            display_df = filtered_df
+    else:
+        display_df = df
+    
+    # 엑셀 스타일의 필터링 가능한 테이블 (항상 data_editor 사용)
     if st.session_state.get('edit_mode', False):
-        # 사용자 목록 가져오기
-        users = _get_users_list()
-        user_names = [user.get('name', '') for user in users if user.get('name')]
-        
-        # 편집된 데이터를 세션 상태에 저장
+        # 편집 모드: 편집 가능
         edited_df = st.data_editor(
-            df,
+            display_df,
             width="stretch",
             column_config={
                 "ID": st.column_config.NumberColumn("ID", width=42, disabled=True),
@@ -1320,49 +1830,143 @@ def _render_voc_tab():
                 "상태": st.column_config.SelectboxColumn("상태", width=60, options=["대기", "진행중", "완료", "보류"]),
                 "우선순위": st.column_config.SelectboxColumn("우선순위", width=60, options=["낮음", "보통", "높음", "긴급"]),
                 "담당자": st.column_config.SelectboxColumn("담당자", width=66, options=user_names),
+                "연관ID": st.column_config.NumberColumn("연관ID", width=60),
             },
             hide_index=True,
             key="voc_data_editor"
         )
         
-        # 편집된 데이터를 세션 상태에 저장 (다른 키 사용)
+        # 편집된 데이터를 세션 상태에 저장
         st.session_state['voc_edited_data'] = edited_df.to_dict('records')
         
         # 편집된 데이터가 있으면 시각적 피드백 제공
-        if not edited_df.equals(df):
+        if not edited_df.equals(display_df):
             st.info("💡 편집된 내용이 있습니다. 상단의 저장 버튼을 클릭하여 변경사항을 저장하세요.")
     else:
-        st.dataframe(
-            df,
+        # 읽기 전용 모드: 필터링만 가능 (편집 불가)
+        filtered_df = st.data_editor(
+            display_df,
             width="stretch",
             column_config={
-                "ID": st.column_config.NumberColumn("ID", width=42),
-                "날짜": st.column_config.TextColumn("날짜", width=66),
-                "회사": st.column_config.TextColumn("회사", width=200),
-                "내용": st.column_config.TextColumn("내용", width=560),
-                "상태": st.column_config.TextColumn("상태", width=60),
-                "우선순위": st.column_config.TextColumn("우선순위", width=60),
-                "담당자": st.column_config.TextColumn("담당자", width=66),
+                "ID": st.column_config.NumberColumn("ID", width=42, disabled=True),
+                "날짜": st.column_config.TextColumn("날짜", width=66, disabled=True),
+                "회사": st.column_config.TextColumn("회사", width=200, disabled=True),
+                "내용": st.column_config.TextColumn("내용", width=560, disabled=True),
+                "상태": st.column_config.TextColumn("상태", width=60, disabled=True),
+                "우선순위": st.column_config.TextColumn("우선순위", width=60, disabled=True),
+                "담당자": st.column_config.TextColumn("담당자", width=66, disabled=True),
+                "연관ID": st.column_config.NumberColumn("연관ID", width=60, disabled=True),
             },
             hide_index=True,
+            key="voc_data_viewer",
+            disabled=True  # 전체 테이블을 읽기 전용으로 설정
         )
     
-    # VOC 추가 기능
-    with st.expander("새 VOC 추가"):
-        with st.form("add_voc_form"):
-            col1, col2 = st.columns(2)
-            with col1:
+    # 샘플 데이터 생성 및 VOC 추가 기능
+    with st.expander("샘플 데이터 생성 및 VOC 추가"):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("### 🎯 샘플 데이터 생성")
+            if st.button("📊 연관 VOC 샘플 데이터 생성", type="primary"):
+                # 샘플 데이터를 세션 상태에 추가
+                if 'sample_voc_data' not in st.session_state:
+                    st.session_state.sample_voc_data = []
+                
+                sample_data = [
+                    {
+                        "ID": len(st.session_state.sample_voc_data) + 1,
+                        "날짜": "2024-01-15",
+                        "회사": "테크코리아",
+                        "내용": "제품 A에 대한 초기 문의 - 성능 개선 요청",
+                        "상태": "진행중",
+                        "우선순위": "높음",
+                        "담당자": "김개발",
+                        "연관ID": 0
+                    },
+                    {
+                        "ID": len(st.session_state.sample_voc_data) + 2,
+                        "날짜": "2024-01-16",
+                        "회사": "테크코리아",
+                        "내용": "제품 A 성능 개선 후속 문의 - 추가 요구사항",
+                        "상태": "대기",
+                        "우선순위": "보통",
+                        "담당자": "김개발",
+                        "연관ID": 1
+                    },
+                    {
+                        "ID": len(st.session_state.sample_voc_data) + 3,
+                        "날짜": "2024-01-17",
+                        "회사": "테크코리아",
+                        "내용": "제품 A 최종 검토 및 승인 요청",
+                        "상태": "대기",
+                        "우선순위": "긴급",
+                        "담당자": "김개발",
+                        "연관ID": 1
+                    },
+                    {
+                        "ID": len(st.session_state.sample_voc_data) + 4,
+                        "날짜": "2024-01-18",
+                        "회사": "스마트솔루션",
+                        "내용": "새로운 프로젝트 제안서 요청",
+                        "상태": "진행중",
+                        "우선순위": "높음",
+                        "담당자": "이기획",
+                        "연관ID": 0
+                    },
+                    {
+                        "ID": len(st.session_state.sample_voc_data) + 5,
+                        "날짜": "2024-01-19",
+                        "회사": "스마트솔루션",
+                        "내용": "프로젝트 제안서 검토 및 수정 요청",
+                        "상태": "대기",
+                        "우선순위": "보통",
+                        "담당자": "이기획",
+                        "연관ID": 4
+                    }
+                ]
+                
+                st.session_state.sample_voc_data.extend(sample_data)
+                st.success(f"✅ {len(sample_data)}개의 연관 VOC 샘플 데이터가 생성되었습니다!")
+                st.rerun()
+            
+            if st.button("🗑️ 샘플 데이터 초기화"):
+                if 'sample_voc_data' in st.session_state:
+                    del st.session_state.sample_voc_data
+                st.success("✅ 샘플 데이터가 초기화되었습니다!")
+                st.rerun()
+        
+        with col2:
+            st.markdown("### ➕ 새 VOC 추가")
+            with st.form("add_voc_form"):
                 voc_date = st.date_input("날짜")
                 voc_company = st.text_input("회사명")
-            with col2:
                 voc_priority = st.selectbox("우선순위", ["낮음", "보통", "높음", "긴급"])
                 voc_status = st.selectbox("상태", ["대기", "진행중", "완료", "보류"])
-            
-            voc_content = st.text_area("VOC 내용")
-            voc_action = st.text_area("액션 아이템")
-            
-            if st.form_submit_button("VOC 추가"):
-                st.success("VOC가 추가되었습니다! (실제 DB 연동 시 저장됩니다)")
+                voc_related_id = st.number_input("연관 ID (0: 최초 문의)", min_value=0, value=0)
+                
+                voc_content = st.text_area("VOC 내용")
+                voc_action = st.text_area("액션 아이템")
+                
+                if st.form_submit_button("VOC 추가"):
+                    # 세션 상태에 VOC 추가
+                    if 'sample_voc_data' not in st.session_state:
+                        st.session_state.sample_voc_data = []
+                    
+                    new_voc = {
+                        "ID": len(st.session_state.sample_voc_data) + 1,
+                        "날짜": str(voc_date),
+                        "회사": voc_company,
+                        "내용": voc_content,
+                        "상태": voc_status,
+                        "우선순위": voc_priority,
+                        "담당자": "사용자",
+                        "연관ID": voc_related_id
+                    }
+                    
+                    st.session_state.sample_voc_data.append(new_voc)
+                    st.success("VOC가 추가되었습니다!")
+                    st.rerun()
 
 def _render_company_tab():
     """Company 탭 렌더링"""
@@ -1809,7 +2413,8 @@ def _get_voc_data():
                         "내용": item.get('content', ''),
                         "상태": item.get('status', ''),
                         "우선순위": item.get('priority', ''),
-                        "담당자": item.get('assignee', {}).get('name', '') if item.get('assignee') else ''
+                        "담당자": item.get('assignee', {}).get('name', '') if item.get('assignee') else '',
+                        "연관ID": item.get('related_id', 0) if item.get('related_id') is not None else 0
                     })
                 return voc_list
             
@@ -1818,15 +2423,30 @@ def _get_voc_data():
             if connection:
                 try:
                     cursor = connection.cursor(dictionary=True)
-                    cursor.execute("""
-                        SELECT v.id, v.date, v.content, v.status, v.priority,
-                               c.name as company_name, u.name as assignee_name
-                        FROM vocs v
-                        LEFT JOIN companies c ON v.company_id = c.id
-                        LEFT JOIN users u ON v.assignee_user_id = u.id
-                        ORDER BY v.date DESC
-                        LIMIT 100
-                    """)
+                    # related_id 컬럼이 존재하는지 확인
+                    cursor.execute("SHOW COLUMNS FROM vocs LIKE 'related_id'")
+                    has_related_id = cursor.fetchone() is not None
+                    
+                    if has_related_id:
+                        cursor.execute("""
+                            SELECT v.id, v.date, v.content, v.status, v.priority, v.related_id,
+                                   c.name as company_name, u.name as assignee_name
+                            FROM vocs v
+                            LEFT JOIN companies c ON v.company_id = c.id
+                            LEFT JOIN users u ON v.assignee_user_id = u.id
+                            ORDER BY v.date DESC
+                            LIMIT 100
+                        """)
+                    else:
+                        cursor.execute("""
+                            SELECT v.id, v.date, v.content, v.status, v.priority, 0 as related_id,
+                                   c.name as company_name, u.name as assignee_name
+                            FROM vocs v
+                            LEFT JOIN companies c ON v.company_id = c.id
+                            LEFT JOIN users u ON v.assignee_user_id = u.id
+                            ORDER BY v.date DESC
+                            LIMIT 100
+                        """)
                     
                     voc_list = []
                     for row in cursor.fetchall():
@@ -1837,7 +2457,8 @@ def _get_voc_data():
                             "내용": row['content'],
                             "상태": row['status'],
                             "우선순위": row['priority'],
-                            "담당자": row['assignee_name'] or ''
+                            "담당자": row['assignee_name'] or '',
+                            "연관ID": row.get('related_id', 0) if row.get('related_id') is not None else 0
                         })
                     
                     if voc_list:
@@ -1857,15 +2478,30 @@ def _get_voc_data():
             if connection:
                 try:
                     cursor = connection.cursor(dictionary=True)
-                    cursor.execute("""
-                        SELECT v.id, v.date, v.content, v.status, v.priority,
-                               c.name as company_name, u.name as assignee_name
-                        FROM vocs v
-                        LEFT JOIN companies c ON v.company_id = c.id
-                        LEFT JOIN users u ON v.assignee_user_id = u.id
-                        ORDER BY v.date DESC
-                        LIMIT 100
-                    """)
+                    # related_id 컬럼이 존재하는지 확인
+                    cursor.execute("SHOW COLUMNS FROM vocs LIKE 'related_id'")
+                    has_related_id = cursor.fetchone() is not None
+                    
+                    if has_related_id:
+                        cursor.execute("""
+                            SELECT v.id, v.date, v.content, v.status, v.priority, v.related_id,
+                                   c.name as company_name, u.name as assignee_name
+                            FROM vocs v
+                            LEFT JOIN companies c ON v.company_id = c.id
+                            LEFT JOIN users u ON v.assignee_user_id = u.id
+                            ORDER BY v.date DESC
+                            LIMIT 100
+                        """)
+                    else:
+                        cursor.execute("""
+                            SELECT v.id, v.date, v.content, v.status, v.priority, 0 as related_id,
+                                   c.name as company_name, u.name as assignee_name
+                            FROM vocs v
+                            LEFT JOIN companies c ON v.company_id = c.id
+                            LEFT JOIN users u ON v.assignee_user_id = u.id
+                            ORDER BY v.date DESC
+                            LIMIT 100
+                        """)
                     
                     voc_list = []
                     for row in cursor.fetchall():
@@ -1876,7 +2512,8 @@ def _get_voc_data():
                             "내용": row['content'],
                             "상태": row['status'],
                             "우선순위": row['priority'],
-                            "담당자": row['assignee_name'] or ''
+                            "담당자": row['assignee_name'] or '',
+                            "연관ID": row.get('related_id', 0) if row.get('related_id') is not None else 0
                         })
                     
                     if voc_list:
@@ -1902,7 +2539,8 @@ def _get_voc_data():
                         "내용": item.get('content', ''),
                         "상태": item.get('status', ''),
                         "우선순위": item.get('priority', ''),
-                        "담당자": item.get('assignee', {}).get('name', '') if item.get('assignee') else ''
+                        "담당자": item.get('assignee', {}).get('name', '') if item.get('assignee') else '',
+                        "연관ID": item.get('related_id', 0) if item.get('related_id') is not None else 0
                     })
                 return voc_list
         
@@ -2606,6 +3244,416 @@ def main():
         voc_table_page()
     else:
         login_page()
+
+# =============================================================================
+# 데이터 저장 함수들
+# =============================================================================
+
+def save_voc_changes(edited_df, original_df):
+    """VOC 변경사항 저장"""
+    try:
+        # 변경된 행 찾기
+        changes = []
+        for idx, row in edited_df.iterrows():
+            if idx < len(original_df):
+                original_row = original_df.iloc[idx]
+                # 변경된 필드 확인
+                changed_fields = {}
+                for col in edited_df.columns:
+                    if col in original_df.columns and str(row[col]) != str(original_row[col]):
+                        changed_fields[col] = {
+                            'old': original_row[col],
+                            'new': row[col]
+                        }
+                
+                if changed_fields:
+                    changes.append({
+                        'id': row['ID'],
+                        'changes': changed_fields
+                    })
+        
+        if not changes:
+            st.info("변경된 내용이 없습니다.")
+            return
+        
+        # API를 통해 변경사항 저장
+        success_count = 0
+        for change in changes:
+            try:
+                # VOC 업데이트 API 호출
+                voc_id = change['id']
+                update_data = {}
+                
+                for field, values in change['changes'].items():
+                    if field == '날짜':
+                        update_data['date'] = str(values['new'])
+                    elif field == '내용':
+                        update_data['content'] = values['new']
+                    elif field == '액션아이템':
+                        update_data['action_item'] = values['new']
+                    elif field == '마감일':
+                        update_data['due_date'] = str(values['new']) if values['new'] else None
+                    elif field == '상태':
+                        update_data['status'] = values['new']
+                    elif field == '우선순위':
+                        update_data['priority'] = values['new']
+                
+                # API 호출
+                response = update_voc_via_api(voc_id, update_data)
+                if response:
+                    success_count += 1
+                    
+            except Exception as e:
+                st.error(f"VOC ID {change['id']} 저장 실패: {str(e)}")
+        
+        if success_count > 0:
+            st.success(f"✅ {success_count}개의 VOC가 성공적으로 저장되었습니다.")
+            st.rerun()
+        else:
+            st.error("저장에 실패했습니다.")
+            
+    except Exception as e:
+        st.error(f"저장 중 오류가 발생했습니다: {str(e)}")
+
+def save_company_changes(edited_df, original_df):
+    """회사 변경사항 저장"""
+    try:
+        # 변경된 행 찾기
+        changes = []
+        for idx, row in edited_df.iterrows():
+            if idx < len(original_df):
+                original_row = original_df.iloc[idx]
+                # 변경된 필드 확인
+                changed_fields = {}
+                for col in edited_df.columns:
+                    if col in original_df.columns and str(row[col]) != str(original_row[col]):
+                        changed_fields[col] = {
+                            'old': original_row[col],
+                            'new': row[col]
+                        }
+                
+                if changed_fields:
+                    changes.append({
+                        'id': row['ID'],
+                        'changes': changed_fields
+                    })
+        
+        if not changes:
+            st.info("변경된 내용이 없습니다.")
+            return
+        
+        # API를 통해 변경사항 저장
+        success_count = 0
+        for change in changes:
+            try:
+                # 회사 업데이트 API 호출
+                company_id = change['id']
+                update_data = {}
+                
+                for field, values in change['changes'].items():
+                    if field == '회사명':
+                        update_data['name'] = values['new']
+                    elif field == '도메인':
+                        update_data['domain'] = values['new']
+                    elif field == '매출':
+                        update_data['revenue'] = values['new']
+                    elif field == '직원수':
+                        update_data['employee'] = values['new']
+                    elif field == '국가':
+                        update_data['nation'] = values['new']
+                
+                # API 호출
+                response = update_company_via_api(company_id, update_data)
+                if response:
+                    success_count += 1
+                    
+            except Exception as e:
+                st.error(f"회사 ID {change['id']} 저장 실패: {str(e)}")
+        
+        if success_count > 0:
+            st.success(f"✅ {success_count}개의 회사가 성공적으로 저장되었습니다.")
+            st.rerun()
+        else:
+            st.error("저장에 실패했습니다.")
+            
+    except Exception as e:
+        st.error(f"저장 중 오류가 발생했습니다: {str(e)}")
+
+def save_contact_changes(edited_df, original_df):
+    """연락처 변경사항 저장"""
+    try:
+        # 변경된 행 찾기
+        changes = []
+        for idx, row in edited_df.iterrows():
+            if idx < len(original_df):
+                original_row = original_df.iloc[idx]
+                # 변경된 필드 확인
+                changed_fields = {}
+                for col in edited_df.columns:
+                    if col in original_df.columns and str(row[col]) != str(original_row[col]):
+                        changed_fields[col] = {
+                            'old': original_row[col],
+                            'new': row[col]
+                        }
+                
+                if changed_fields:
+                    changes.append({
+                        'id': row['ID'],
+                        'changes': changed_fields
+                    })
+        
+        if not changes:
+            st.info("변경된 내용이 없습니다.")
+            return
+        
+        # API를 통해 변경사항 저장
+        success_count = 0
+        for change in changes:
+            try:
+                # 연락처 업데이트 API 호출
+                contact_id = change['id']
+                update_data = {}
+                
+                for field, values in change['changes'].items():
+                    if field == '이름':
+                        update_data['name'] = values['new']
+                    elif field == '직책':
+                        update_data['title'] = values['new']
+                    elif field == '이메일':
+                        update_data['email'] = values['new']
+                    elif field == '전화번호':
+                        update_data['phone'] = values['new']
+                    elif field == '메모':
+                        update_data['note'] = values['new']
+                
+                # API 호출
+                response = update_contact_via_api(contact_id, update_data)
+                if response:
+                    success_count += 1
+                    
+            except Exception as e:
+                st.error(f"연락처 ID {change['id']} 저장 실패: {str(e)}")
+        
+        if success_count > 0:
+            st.success(f"✅ {success_count}개의 연락처가 성공적으로 저장되었습니다.")
+            st.rerun()
+        else:
+            st.error("저장에 실패했습니다.")
+            
+    except Exception as e:
+        st.error(f"저장 중 오류가 발생했습니다: {str(e)}")
+
+def save_project_changes(edited_df, original_df):
+    """프로젝트 변경사항 저장"""
+    try:
+        # 변경된 행 찾기
+        changes = []
+        for idx, row in edited_df.iterrows():
+            if idx < len(original_df):
+                original_row = original_df.iloc[idx]
+                # 변경된 필드 확인
+                changed_fields = {}
+                for col in edited_df.columns:
+                    if col in original_df.columns and str(row[col]) != str(original_row[col]):
+                        changed_fields[col] = {
+                            'old': original_row[col],
+                            'new': row[col]
+                        }
+                
+                if changed_fields:
+                    changes.append({
+                        'id': row['ID'],
+                        'changes': changed_fields
+                    })
+        
+        if not changes:
+            st.info("변경된 내용이 없습니다.")
+            return
+        
+        # API를 통해 변경사항 저장
+        success_count = 0
+        for change in changes:
+            try:
+                # 프로젝트 업데이트 API 호출
+                project_id = change['id']
+                update_data = {}
+                
+                for field, values in change['changes'].items():
+                    if field == '프로젝트명':
+                        update_data['name'] = values['new']
+                    elif field == '분야':
+                        update_data['field'] = values['new']
+                    elif field == '대상앱':
+                        update_data['target_app'] = values['new']
+                    elif field == 'AI모델':
+                        update_data['ai_model'] = values['new']
+                    elif field == '성능':
+                        update_data['perf'] = values['new']
+                    elif field == '전력':
+                        update_data['power'] = values['new']
+                    elif field == '폼팩터':
+                        update_data['form_factor'] = values['new']
+                    elif field == '메모리':
+                        update_data['memory'] = values['new']
+                    elif field == '가격':
+                        update_data['price'] = values['new']
+                    elif field == '요구사항':
+                        update_data['requirements'] = values['new']
+                    elif field == '경쟁사':
+                        update_data['competitors'] = values['new']
+                    elif field == '결과':
+                        update_data['result'] = values['new']
+                    elif field == '근본원인':
+                        update_data['root_cause'] = values['new']
+                
+                # API 호출
+                response = update_project_via_api(project_id, update_data)
+                if response:
+                    success_count += 1
+                    
+            except Exception as e:
+                st.error(f"프로젝트 ID {change['id']} 저장 실패: {str(e)}")
+        
+        if success_count > 0:
+            st.success(f"✅ {success_count}개의 프로젝트가 성공적으로 저장되었습니다.")
+            st.rerun()
+        else:
+            st.error("저장에 실패했습니다.")
+            
+    except Exception as e:
+        st.error(f"저장 중 오류가 발생했습니다: {str(e)}")
+
+# =============================================================================
+# API 호출 함수들
+# =============================================================================
+
+def update_voc_via_api(voc_id, update_data):
+    """VOC 업데이트 API 호출"""
+    try:
+        token = st.session_state.get('session_token')
+        if not token:
+            st.error("인증 토큰이 없습니다.")
+            return False
+        
+        headers = {
+            'Authorization': f'Bearer {token}',
+            'Content-Type': 'application/json'
+        }
+        
+        response = requests.patch(
+            f"{API_BASE_URL}/voc/{voc_id}",
+            json=update_data,
+            headers=headers
+        )
+        
+        if response.status_code == 200:
+            return True
+        elif response.status_code == 403:
+            st.error("권한이 없습니다. 이 VOC를 수정할 수 없습니다.")
+            return False
+        else:
+            st.error(f"VOC 업데이트 실패: {response.text}")
+            return False
+            
+    except Exception as e:
+        st.error(f"API 호출 중 오류: {str(e)}")
+        return False
+
+def update_company_via_api(company_id, update_data):
+    """회사 업데이트 API 호출"""
+    try:
+        token = st.session_state.get('session_token')
+        if not token:
+            st.error("인증 토큰이 없습니다.")
+            return False
+        
+        headers = {
+            'Authorization': f'Bearer {token}',
+            'Content-Type': 'application/json'
+        }
+        
+        response = requests.patch(
+            f"{API_BASE_URL}/companies/{company_id}",
+            json=update_data,
+            headers=headers
+        )
+        
+        if response.status_code == 200:
+            return True
+        elif response.status_code == 403:
+            st.error("권한이 없습니다. 이 회사를 수정할 수 없습니다.")
+            return False
+        else:
+            st.error(f"회사 업데이트 실패: {response.text}")
+            return False
+            
+    except Exception as e:
+        st.error(f"API 호출 중 오류: {str(e)}")
+        return False
+
+def update_contact_via_api(contact_id, update_data):
+    """연락처 업데이트 API 호출"""
+    try:
+        token = st.session_state.get('session_token')
+        if not token:
+            st.error("인증 토큰이 없습니다.")
+            return False
+        
+        headers = {
+            'Authorization': f'Bearer {token}',
+            'Content-Type': 'application/json'
+        }
+        
+        response = requests.patch(
+            f"{API_BASE_URL}/contacts/{contact_id}",
+            json=update_data,
+            headers=headers
+        )
+        
+        if response.status_code == 200:
+            return True
+        elif response.status_code == 403:
+            st.error("권한이 없습니다. 이 연락처를 수정할 수 없습니다.")
+            return False
+        else:
+            st.error(f"연락처 업데이트 실패: {response.text}")
+            return False
+            
+    except Exception as e:
+        st.error(f"API 호출 중 오류: {str(e)}")
+        return False
+
+def update_project_via_api(project_id, update_data):
+    """프로젝트 업데이트 API 호출"""
+    try:
+        token = st.session_state.get('session_token')
+        if not token:
+            st.error("인증 토큰이 없습니다.")
+            return False
+        
+        headers = {
+            'Authorization': f'Bearer {token}',
+            'Content-Type': 'application/json'
+        }
+        
+        response = requests.patch(
+            f"{API_BASE_URL}/projects/{project_id}",
+            json=update_data,
+            headers=headers
+        )
+        
+        if response.status_code == 200:
+            return True
+        elif response.status_code == 403:
+            st.error("권한이 없습니다. 이 프로젝트를 수정할 수 없습니다.")
+            return False
+        else:
+            st.error(f"프로젝트 업데이트 실패: {response.text}")
+            return False
+            
+    except Exception as e:
+        st.error(f"API 호출 중 오류: {str(e)}")
+        return False
 
 if __name__ == "__main__":
     main()

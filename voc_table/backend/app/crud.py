@@ -310,8 +310,37 @@ def create_voc(db: Session, voc: VOCCreate, user_id: int, ip: Optional[str] = No
     
     return db_voc
 
+def check_voc_edit_permission(db: Session, voc_id: int, current_user_id: int) -> bool:
+    """VOC 수정 권한 검증"""
+    # VOC 조회
+    db_voc = get_voc(db, voc_id)
+    if not db_voc:
+        return False
+    
+    # 현재 사용자 정보 조회
+    current_user = get_user_by_id(db, current_user_id)
+    if not current_user:
+        return False
+    
+    # VOC 작성자 정보 조회
+    voc_author = get_user_by_id(db, db_voc.assignee_user_id)
+    if not voc_author:
+        return False
+    
+    # 권한 검증 로직
+    if current_user.auth_level <= 2:
+        # 레벨 2 이하: 본인 데이터만 수정 가능
+        return current_user_id == db_voc.assignee_user_id
+    else:
+        # 레벨 3 이상: 자기 레벨 이하 유저가 작성한 데이터 수정 가능
+        return current_user.auth_level >= voc_author.auth_level
+
 def update_voc(db: Session, voc_id: int, voc_update: VOCUpdate, user_id: int, ip: Optional[str] = None) -> Optional[VOC]:
     """VOC 수정"""
+    # 권한 검증
+    if not check_voc_edit_permission(db, voc_id, user_id):
+        return None
+    
     db_voc = get_voc(db, voc_id)
     if not db_voc:
         return None
@@ -420,8 +449,22 @@ def create_company(db: Session, company: CompanyCreate, user_id: int, ip: Option
     
     return db_company
 
+def check_company_edit_permission(db: Session, company_id: int, current_user_id: int) -> bool:
+    """회사 수정 권한 검증"""
+    # 현재 사용자 정보 조회
+    current_user = get_user_by_id(db, current_user_id)
+    if not current_user:
+        return False
+    
+    # 레벨 2 이상만 수정 가능
+    return current_user.auth_level >= 2
+
 def update_company(db: Session, company_id: int, company_update: CompanyUpdate, user_id: int, ip: Optional[str] = None) -> Optional[Company]:
     """회사 수정"""
+    # 권한 검증
+    if not check_company_edit_permission(db, company_id, user_id):
+        return None
+    
     db_company = get_company(db, company_id)
     if not db_company:
         return None
@@ -522,8 +565,22 @@ def create_contact(db: Session, contact: ContactCreate, user_id: int, ip: Option
     
     return db_contact
 
+def check_contact_edit_permission(db: Session, contact_id: int, current_user_id: int) -> bool:
+    """연락처 수정 권한 검증"""
+    # 현재 사용자 정보 조회
+    current_user = get_user_by_id(db, current_user_id)
+    if not current_user:
+        return False
+    
+    # 레벨 2 이상만 수정 가능
+    return current_user.auth_level >= 2
+
 def update_contact(db: Session, contact_id: int, contact_update: ContactUpdate, user_id: int, ip: Optional[str] = None) -> Optional[Contact]:
     """연락처 수정"""
+    # 권한 검증
+    if not check_contact_edit_permission(db, contact_id, user_id):
+        return None
+    
     db_contact = get_contact(db, contact_id)
     if not db_contact:
         return None
@@ -633,8 +690,22 @@ def create_project(db: Session, project: ProjectCreate, user_id: int, ip: Option
     
     return db_project
 
+def check_project_edit_permission(db: Session, project_id: int, current_user_id: int) -> bool:
+    """프로젝트 수정 권한 검증"""
+    # 현재 사용자 정보 조회
+    current_user = get_user_by_id(db, current_user_id)
+    if not current_user:
+        return False
+    
+    # 레벨 2 이상만 수정 가능
+    return current_user.auth_level >= 2
+
 def update_project(db: Session, project_id: int, project_update: ProjectUpdate, user_id: int, ip: Optional[str] = None) -> Optional[Project]:
     """프로젝트 수정"""
+    # 권한 검증
+    if not check_project_edit_permission(db, project_id, user_id):
+        return None
+    
     db_project = get_project(db, project_id)
     if not db_project:
         return None
