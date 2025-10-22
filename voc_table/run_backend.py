@@ -20,7 +20,7 @@ if __name__ == "__main__":
     
     try:
         uvicorn.run(
-            "backend.app.main:app",
+            "backend.app.main_new:app",
             host="0.0.0.0",
             port=8000,
             reload=True,

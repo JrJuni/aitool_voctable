@@ -18,7 +18,9 @@
       "Bash(python:*)",
       "mcp__brave-search__brave_web_search",
       "WebFetch(domain:pypi.org)",
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "Bash(.venv/Scripts/uvicorn.exe:*)",
+      "Bash(.venv/Scripts/python.exe -m uvicorn:*)"
     ],
     "deny": [],
     "ask": []
