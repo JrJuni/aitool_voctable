@@ -1,4 +1,9 @@
 # Excel import/export utilities
+#
+# TODO(borrow-from-deal-intel): deal-intel-mcp의 리포트 파이프라인에 있는 다음 항목은
+#   현재 레포 범위 밖이라 이식하지 않았다 — 추후 도입 검토:
+#   - 구조화된 결과 envelope({ok, error_code, stage, hint, retryable})로 export 결과 반환
+#   - Excel '가져오기(import)' 경로 및 검증 리포트 (현재는 내보내기만 구현)
 import pandas as pd
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -11,6 +16,37 @@ import logging
 from .db_models import User, Company, Contact, Project, VOC, AuditLog
 
 logger = logging.getLogger(__name__)
+
+# 스프레드시트 수식 인젝션 방어용 prefix
+_FORMULA_PREFIXES = ("=", "+", "-", "@")
+
+
+def _sanitize_cell(value: Any) -> Any:
+    """문자열 셀이 수식 문자로 시작하면 작은따옴표를 붙여 수식 실행을 막는다."""
+    if isinstance(value, str):
+        stripped = value.lstrip(" \t\r\n")
+        if stripped[:1] in _FORMULA_PREFIXES:
+            return "'" + value
+    return value
+
+
+def _sanitize_df(df: "pd.DataFrame") -> "pd.DataFrame":
+    """DataFrame의 모든 셀에 수식 인젝션 방어를 적용한다(숫자/날짜는 그대로)."""
+    return df.map(_sanitize_cell)
+
+
+def _safe_filename(name: Optional[str], default: str = "export.xlsx") -> str:
+    """파일명을 안전 문자로 정규화하고 경로 구분자를 제거한다(path traversal 방지)."""
+    if not name:
+        return default
+    # 디렉터리 성분 제거 (../, 절대경로 차단)
+    base = os.path.basename(str(name).replace("\\", "/"))
+    cleaned = "".join(c if (c.isalnum() or c in "-_.") else "_" for c in base)
+    cleaned = cleaned.strip("._") or "export"
+    if not cleaned.lower().endswith(".xlsx"):
+        cleaned += ".xlsx"
+    return cleaned
+
 
 # Export 디렉토리 경로 (프로젝트 루트 기준)
 EXPORT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "exports")
@@ -44,6 +80,7 @@ def export_voc_to_excel(db: Session, filename: Optional[str] = None) -> str:
             filename = f"export_voc_{timestamp}.xlsx"
 
         # 전체 파일 경로 생성
+        filename = _safe_filename(filename)
         filepath = os.path.join(export_dir, filename)
 
         # ExcelWriter 생성
@@ -80,6 +117,7 @@ def export_full_tables_to_excel(db: Session, filename: Optional[str] = None) -> 
             filename = f"export_full_{timestamp}.xlsx"
 
         # 전체 파일 경로 생성
+        filename = _safe_filename(filename)
         filepath = os.path.join(export_dir, filename)
 
         # ExcelWriter 생성
@@ -122,6 +160,7 @@ def export_biz_template_to_excel(db: Session, filename: Optional[str] = None) ->
             filename = f"export_biz_{timestamp}.xlsx"
 
         # 전체 파일 경로 생성
+        filename = _safe_filename(filename)
         filepath = os.path.join(export_dir, filename)
 
         # ExcelWriter 생성
@@ -171,6 +210,7 @@ def export_all_tables_to_excel(db: Session, filename: Optional[str] = None) -> s
             filename = f"export_all_{timestamp}.xlsx"
 
         # 전체 파일 경로 생성
+        filename = _safe_filename(filename)
         filepath = os.path.join(export_dir, filename)
 
         # ExcelWriter 생성
@@ -224,7 +264,7 @@ def _export_table_to_sheet(db: Session, model_class, sheet_name: str, writer: pd
             df = pd.DataFrame(data)
         
         # 엑셀 시트로 저장
-        df.to_excel(writer, sheet_name=sheet_name, index=False)
+        _sanitize_df(df).to_excel(writer, sheet_name=sheet_name, index=False)
         
         # 컬럼 너비 자동 조정
         _adjust_column_widths(writer, sheet_name, df)
@@ -303,7 +343,7 @@ def _export_voc_table_to_sheet(db: Session, sheet_name: str, writer: pd.ExcelWri
                 df = df[cols]
         
         # 엑셀 시트로 저장
-        df.to_excel(writer, sheet_name=sheet_name, index=False)
+        _sanitize_df(df).to_excel(writer, sheet_name=sheet_name, index=False)
         
         # 컬럼 너비 자동 조정
         _adjust_column_widths(writer, sheet_name, df)
@@ -392,7 +432,7 @@ def _export_voc_template_to_sheet(db: Session, sheet_name: str, writer: pd.Excel
                 df = df[cols]
         
         # 엑셀 시트로 저장
-        df.to_excel(writer, sheet_name=sheet_name, index=False)
+        _sanitize_df(df).to_excel(writer, sheet_name=sheet_name, index=False)
         
         # 템플릿용 컬럼 너비 및 포맷팅 조정
         _adjust_template_column_widths(writer, sheet_name, df, 'voc')
@@ -481,7 +521,7 @@ def _export_project_template_to_sheet(db: Session, sheet_name: str, writer: pd.E
                 df = df[cols]
         
         # 엑셀 시트로 저장
-        df.to_excel(writer, sheet_name=sheet_name, index=False)
+        _sanitize_df(df).to_excel(writer, sheet_name=sheet_name, index=False)
         
         # 템플릿용 컬럼 너비 및 포맷팅 조정
         _adjust_template_column_widths(writer, sheet_name, df, 'project')
@@ -523,7 +563,7 @@ def _create_empty_voc_template_sheet(writer: pd.ExcelWriter, sheet_name: str):
         df = pd.DataFrame(columns=voc_columns)
         
         # 엑셀 시트로 저장
-        df.to_excel(writer, sheet_name=sheet_name, index=False)
+        _sanitize_df(df).to_excel(writer, sheet_name=sheet_name, index=False)
         
         # 템플릿용 컬럼 너비 및 포맷팅 조정
         _adjust_template_column_widths(writer, sheet_name, df, 'voc')
@@ -558,7 +598,7 @@ def _create_empty_project_template_sheet(writer: pd.ExcelWriter, sheet_name: str
         df = pd.DataFrame(columns=project_columns)
         
         # 엑셀 시트로 저장
-        df.to_excel(writer, sheet_name=sheet_name, index=False)
+        _sanitize_df(df).to_excel(writer, sheet_name=sheet_name, index=False)
         
         # 템플릿용 컬럼 너비 및 포맷팅 조정
         _adjust_template_column_widths(writer, sheet_name, df, 'project')
@@ -624,7 +664,7 @@ def _export_table_to_sheet_exclude_ids(db: Session, model_class, sheet_name: str
             df = pd.DataFrame(data)
         
         # 엑셀 시트로 저장
-        df.to_excel(writer, sheet_name=sheet_name, index=False)
+        _sanitize_df(df).to_excel(writer, sheet_name=sheet_name, index=False)
         
         # 컬럼 너비 자동 조정
         _adjust_column_widths(writer, sheet_name, df)
@@ -884,6 +924,7 @@ def export_table_to_excel(db: Session, table_name: str, filename: Optional[str] 
             filename = f"export_{table_name}_{timestamp}.xlsx"
 
         # 전체 파일 경로 생성
+        filename = _safe_filename(filename)
         filepath = os.path.join(export_dir, filename)
 
         # ExcelWriter 생성
