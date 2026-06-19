@@ -37,6 +37,18 @@
 - **해결/포기**: 본 작업 범위(시크릿/문서/위생/sanitizer)에서 기존 테스트 리팩터는 범위 밖으로 두고,
   새 `test_excel_sanitizer.py`만 실제 통과하도록 작성. 기존 테스트의 픽스처 정비는 후속 작업으로 남김(TODO).
 
+## 5. Alembic 마이그레이션 체인 단절 (사전 존재 버그)
+
+- **시도한 것**: Docker 없는 런타임 검증에서 SQLite로 `alembic upgrade head` 적용.
+- **실패 원인**: `002`의 `down_revision = '001_initial_migration'`이 `001`의 실제 revision id(`'001'`)와
+  불일치 → revision map 구성 단계에서 `KeyError: '001_initial_migration'`. 그 결과 `docker compose`의
+  migration 컨테이너가 실패하고, `depends_on: migration 성공`인 backend가 기동되지 못한다.
+- **해결**: 사용자 승인 후 `002`의 `down_revision`을 `'001'`로 정정(스키마 DDL은 한 글자도 바꾸지 않고
+  체인 연결만 수정). 수정 후 SQLite에서 6개 테이블(users/companies/contacts/projects/vocs/audit_logs)
+  생성 + head=003 정상 적용 확인. ("DB 스키마 변경 금지" 가드레일의 취지(DDL 불변)는 지킴.)
+- **부가**: Windows 로컬에서 `alembic` CLI가 `alembic.ini`(UTF-8 한글 주석)를 cp949로 읽어 실패함.
+  Linux 컨테이너(UTF-8)에선 무관. 로컬 검증은 ini를 읽지 않는 코드 기반 `Config`로 우회했다.
+
 ---
 
 ## CI 반영 (`.github/workflows/ci.yml`와 1:1 매칭)
