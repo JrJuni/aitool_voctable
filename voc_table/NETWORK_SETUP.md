@@ -34,21 +34,21 @@ cd "C:\Users\tyric\Desktop\Study\mb_tool\projects\voc_table"
 python run_backend.py
 ```
 - **로컬 접속**: http://localhost:8000
-- **내부망 접속**: http://172.16.5.75:8000
-- **API 문서**: http://172.16.5.75:8000/docs
+- **내부망 접속**: http://<your-server-ip>:8000
+- **API 문서**: http://<your-server-ip>:8000/docs
 
 ### 프론트엔드 실행
 ```bash
 python run_frontend.py
 ```
 - **로컬 접속**: http://localhost:8501
-- **내부망 접속**: http://172.16.5.75:8501
+- **내부망 접속**: http://<your-server-ip>:8501
 
 ## 👥 다른 사용자 접속 방법
 
 ### 1. 브라우저 접속
 ```
-http://172.16.5.75:8501
+http://<your-server-ip>:8501
 ```
 
 ### 2. 사용자 계정 생성

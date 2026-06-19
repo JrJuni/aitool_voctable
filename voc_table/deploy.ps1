@@ -59,5 +59,5 @@ Write-Host "   - 서비스 재시작: docker-compose restart" -ForegroundColor W
 Write-Host "   - 데이터베이스 접속: docker-compose exec mysql mysql -u voc_user -p voc_database" -ForegroundColor White
 Write-Host ""
 Write-Host "🔐 기본 계정:" -ForegroundColor Cyan
-Write-Host "   - HR 관리자: admin@mobilint.com / 0000" -ForegroundColor White
-Write-Host "   - 테스트 사용자: kim.chulsoo@mobilint.com / 0000" -ForegroundColor White
+Write-Host "   - 최초 1회 DEFAULT_ADMIN_EMAIL/DEFAULT_RESET_PW 설정 후 POST /admin/setup-default-hr 로 생성" -ForegroundColor White
+Write-Host "   - 자세한 내용은 voc_table/env.example 과 README 참고" -ForegroundColor White

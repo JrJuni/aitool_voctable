@@ -74,15 +74,15 @@ docker-compose logs -f
 
 ## 🔐 기본 계정
 
-### HR 관리자 계정
-- **이메일**: admin@mobilint.com
-- **비밀번호**: 0000
-- **권한 레벨**: 5 (최고 관리자)
+기본 계정은 레포에 시드하지 않는다. 최초 1회 `.env`에 `DEFAULT_ADMIN_EMAIL`과
+`DEFAULT_RESET_PW`를 설정한 뒤, 백엔드의 시드 엔드포인트로 관리자를 생성한다:
 
-### 테스트 사용자 계정
-- **이메일**: kim.chulsoo@mobilint.com
-- **비밀번호**: 0000
-- **권한 레벨**: 1 (일반 사용자)
+```bash
+curl -X POST http://localhost:8000/admin/setup-default-hr
+```
+
+- 생성되는 관리자 이메일: `DEFAULT_ADMIN_EMAIL` (권한 레벨 5)
+- 초기 비밀번호: `DEFAULT_RESET_PW` (최초 로그인 후 변경 권장)
 
 ## 📊 관리 명령어
 
@@ -162,15 +162,15 @@ docker system prune -a
 
 ### 환경 변수 (.env)
 ```env
-# 데이터베이스 설정
-DATABASE_URL=mysql+pymysql://voc_user:voc_password@mysql:3306/voc_database
-MYSQL_ROOT_PASSWORD=root_password
+# 데이터베이스 설정 (값은 voc_table/env.example 참고, 실제 비밀번호로 채울 것)
+DATABASE_URL=replace-with-db-url
+MYSQL_ROOT_PASSWORD=replace-with-root-password
 MYSQL_DATABASE=voc_database
 MYSQL_USER=voc_user
-MYSQL_PASSWORD=voc_password
+MYSQL_PASSWORD=replace-with-db-password
 
 # JWT 설정
-JWT_SECRET=your-super-secret-jwt-key-change-in-production
+JWT_SECRET=replace-with-a-long-random-secret
 TOKEN_EXPIRE_MIN=30
 
 # 로깅 설정

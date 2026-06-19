@@ -7,10 +7,10 @@ services:
     container_name: voc_mysql
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: root_password
-      MYSQL_DATABASE: voc_database
-      MYSQL_USER: voc_user
-      MYSQL_PASSWORD: voc_password
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-voc_database}
+      MYSQL_USER: ${MYSQL_USER:-voc_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}
     ports:
       - "3306:3306"
     volumes:
@@ -30,10 +30,10 @@ services:
       dockerfile: Dockerfile
     container_name: voc_migration
     environment:
-      - DATABASE_URL=mysql+pymysql://voc_user:voc_password@mysql:3306/voc_database
-      - JWT_SECRET=your-super-secret-jwt-key-change-in-production
-      - TOKEN_EXPIRE_MIN=30
-      - LOG_LEVEL=INFO
+      - DATABASE_URL=${DATABASE_URL:?set DATABASE_URL in .env}
+      - JWT_SECRET=${JWT_SECRET:?set JWT_SECRET in .env}
+      - TOKEN_EXPIRE_MIN=${TOKEN_EXPIRE_MIN:-30}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     depends_on:
       mysql:
         condition: service_healthy
@@ -50,10 +50,10 @@ services:
     container_name: voc_backend
     restart: unless-stopped
     environment:
-      - DATABASE_URL=mysql+pymysql://voc_user:voc_password@mysql:3306/voc_database
-      - JWT_SECRET=your-super-secret-jwt-key-change-in-production
-      - TOKEN_EXPIRE_MIN=30
-      - LOG_LEVEL=INFO
+      - DATABASE_URL=${DATABASE_URL:?set DATABASE_URL in .env}
+      - JWT_SECRET=${JWT_SECRET:?set JWT_SECRET in .env}
+      - TOKEN_EXPIRE_MIN=${TOKEN_EXPIRE_MIN:-30}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     ports:
       - "8000:8000"
     depends_on:

@@ -18,10 +18,14 @@ import pandas as pd
 warnings.filterwarnings("ignore", message=".*st.cache.*", category=FutureWarning)
 
 # 백엔드 API URL 설정
-API_BASE_URL = os.getenv("API_BASE_URL", "http://172.16.5.75:8000")
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 
 # 데이터 소스 우선순위 설정 (환경변수로 제어 가능)
 DATA_SOURCE_PRIORITY = os.getenv("DATA_SOURCE_PRIORITY", "api_first")  # "api_first" 또는 "local_first"
+
+# 기본 관리자/비밀번호 정책 (환경변수로만 주입 — 코드에 실값을 두지 않는다)
+DEFAULT_ADMIN_EMAIL = os.getenv("DEFAULT_ADMIN_EMAIL", "admin@example.com")
+DEFAULT_RESET_PW = os.getenv("DEFAULT_RESET_PW", "")
 
 # 사용자 데이터 파일 경로를 모듈 디렉터리 기준으로 고정
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -798,24 +802,26 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 USER_DATA_FILE = os.path.join(BASE_DIR, "user_data.json")
 
 def _default_users():
+    # 시드 비밀번호는 DEFAULT_RESET_PW 환경변수로만 주입한다(코드에 실값 없음).
+    seed_pw = DEFAULT_RESET_PW or os.urandom(8).hex()
     return {
-        "admin@mobilint.com": {
+        DEFAULT_ADMIN_EMAIL: {
             "username": "admin",
-            "password_hash": get_password_hash("0000"),
+            "password_hash": get_password_hash(seed_pw),
             "auth_level": 5,
             "is_active": True,
             "department": "HR"
         },
         "user@example.com": {
             "username": "user",
-            "password_hash": get_password_hash("password123"),
+            "password_hash": get_password_hash(seed_pw),
             "auth_level": 1,
             "is_active": True,
             "department": "전략팀"
         },
         "manager@example.com": {
             "username": "manager",
-            "password_hash": get_password_hash("0000"),
+            "password_hash": get_password_hash(seed_pw),
             "auth_level": 3,
             "is_active": True,
             "department": "전략팀"
@@ -917,7 +923,9 @@ def check_password_reset_needed(email: str, password: str) -> bool:
     user = temp_users.get(email)
     if not user:
         return False
-    return verify_password("0000", user["password_hash"]) and password == "0000"
+    if not DEFAULT_RESET_PW:
+        return False
+    return verify_password(DEFAULT_RESET_PW, user["password_hash"]) and password == DEFAULT_RESET_PW
 
 def update_user_password(email: str, new_password: str) -> bool:
     """사용자 비밀번호 업데이트"""
@@ -966,8 +974,11 @@ def reset_user_password(email: str, username: str, actor_email: str) -> bool:
     
     if actor["auth_level"] < 3 or actor["auth_level"] < user["auth_level"]:
         return False
-    
-    temp_users[email]["password_hash"] = get_password_hash("0000")
+
+    if not DEFAULT_RESET_PW:
+        return False
+
+    temp_users[email]["password_hash"] = get_password_hash(DEFAULT_RESET_PW)
     save_users_to_file(temp_users)  # 파일에 저장
     return True
 
@@ -985,8 +996,8 @@ def password_reset_page():
                 st.error("비밀번호는 6자리 이상이어야 합니다.")
             elif new_password != confirm_password:
                 st.error("비밀번호가 일치하지 않습니다.")
-            elif new_password == "0000":
-                st.error("보안을 위해 0000은 사용할 수 없습니다.")
+            elif DEFAULT_RESET_PW and new_password == DEFAULT_RESET_PW:
+                st.error("보안을 위해 기본 초기화 비밀번호는 사용할 수 없습니다.")
             else:
                 if update_user_password(st.session_state.user_email, new_password):
                     # 비밀번호 변경 후 자동 로그인 처리
@@ -1104,7 +1115,7 @@ def login_page():
                             with col2:
                                 if st.button("초기화", key=f"reset_{reset_user['email']}"):
                                     if reset_user_password(reset_email, reset_username, reset_user['email']):
-                                        st.success("비밀번호가 0000으로 초기화되었습니다.")
+                                        st.success("비밀번호가 기본 비밀번호로 초기화되었습니다.")
                                         st.rerun()
                                     else:
                                         st.error("초기화에 실패했습니다.")

@@ -4,9 +4,13 @@ from sqlalchemy import and_
 from passlib.context import CryptContext
 from datetime import datetime
 from typing import Optional, List
+import logging
 from .db_models import User, AuditLog, Company, Contact, Project, VOC
 from .schemas import UserCreate, UserUpdate, CompanyCreate, CompanyUpdate, ContactCreate, ContactUpdate, ProjectCreate, ProjectUpdate, VOCCreate, VOCUpdate
 from .logging_conf import log_user_creation, log_user_update
+from .config import settings
+
+logger = logging.getLogger(__name__)
 
 # 비밀번호 해싱 컨텍스트
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -127,24 +131,32 @@ def authenticate_user(db: Session, email: str, password: str) -> Optional[User]:
     return user
 
 def check_password_reset_needed(db: Session, email: str, password: str) -> bool:
-    """비밀번호가 0000인지 확인"""
+    """비밀번호가 기본 초기화 비밀번호(DEFAULT_RESET_PW)인지 확인"""
+    default_pw = settings.DEFAULT_RESET_PW
+    if not default_pw:
+        return False
     user = get_user_by_email(db, email)
     if not user:
         return False
-    return verify_password("0000", user.hashed_password) and password == "0000"
+    return verify_password(default_pw, user.hashed_password) and password == default_pw
 
 def reset_password_to_default(db: Session, user_id: int, actor_user_id: int, ip: Optional[str] = None) -> bool:
-    """비밀번호를 0000으로 초기화"""
+    """비밀번호를 기본 초기화 비밀번호(DEFAULT_RESET_PW)로 초기화"""
+    default_pw = settings.DEFAULT_RESET_PW
+    if not default_pw:
+        logger.warning("DEFAULT_RESET_PW가 설정되지 않아 비밀번호 초기화를 건너뜁니다.")
+        return False
+
     user = get_user_by_id(db, user_id)
     if not user:
         return False
-    
-    # 비밀번호를 0000으로 초기화
-    user.hashed_password = get_password_hash("0000")
+
+    # 비밀번호를 기본값으로 초기화
+    user.hashed_password = get_password_hash(default_pw)
     user.updated_at = datetime.utcnow()
-    
+
     db.commit()
-    
+
     # 감사 로그 기록
     create_audit_log(
         db=db,
@@ -152,10 +164,10 @@ def reset_password_to_default(db: Session, user_id: int, actor_user_id: int, ip:
         action="password_reset",
         table_name="users",
         row_id=user.id,
-        after_json={"action": "password_reset_to_0000"},
+        after_json={"action": "password_reset"},
         ip=ip
     )
-    
+
     return True
 
 def update_password(db: Session, user_id: int, new_password: str, ip: Optional[str] = None) -> bool:

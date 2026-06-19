@@ -244,6 +244,10 @@ voc_table/frontend/user_data.json.bak
 voc_table/frontend/.sessions/
 voc_table/frontend/.sessions/*
 
+# Seed/admin credential files (use create_admin.example.json as a template)
+voc_table/create_admin.json
+create_admin.json
+
 # VOC Table security files (쿠키 암호화 키)
 voc_table/frontend/.cookie_secret_key
 **/.cookie_secret_key

@@ -1,13 +1,14 @@
 # JWT 인증 유틸리티
-import os
 import jwt
 from datetime import datetime, timedelta
 from typing import Optional
 
-# JWT 설정
-SECRET_KEY = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("TOKEN_EXPIRE_MIN", "30"))
+from .config import settings
+
+# JWT 설정 (config.settings 단일 출처에서 읽는다)
+SECRET_KEY = settings.JWT_SECRET
+ALGORITHM = settings.JWT_ALGORITHM
+ACCESS_TOKEN_EXPIRE_MINUTES = settings.ACCESS_TOKEN_EXPIRE_MINUTES
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
