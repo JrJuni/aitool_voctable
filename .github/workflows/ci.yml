@@ -15,7 +15,8 @@ jobs:
         run: |
           # 추적 파일에서 알려진 시크릿/PII 패턴이 0건이어야 한다.
           PATTERN='mobilint\.com|172\.16\.5\.75|your-secret-key|your-super-secret|voc_password|root_password|["'"'"'/ ]0000["'"'"' ]|0000으로|0000은'
-          if git ls-files | xargs grep -nE "$PATTERN" 2>/dev/null; then
+          # 스캐너 자신(이 워크플로우)은 패턴 문자열을 포함하므로 제외한다.
+          if git ls-files | grep -v '.github/workflows/ci.yml' | xargs grep -nE "$PATTERN" 2>/dev/null; then
             echo "::error::Committed secret/PII pattern found (see matches above)."
             exit 1
           fi
