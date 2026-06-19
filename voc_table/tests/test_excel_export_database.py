@@ -56,7 +56,7 @@ def create_test_data(db):
     # 사용자 데이터
     users = [
         User(
-            email="admin@mobilint.com",
+            email="admin@example.com",
             username="admin",
             hashed_password="hashed_password_123",
             auth_level=5,
@@ -66,7 +66,7 @@ def create_test_data(db):
             updated_at=datetime.now()
         ),
         User(
-            email="user1@mobilint.com",
+            email="user1@example.com",
             username="user1",
             hashed_password="hashed_password_123",
             auth_level=2,

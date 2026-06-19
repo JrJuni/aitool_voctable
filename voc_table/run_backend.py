@@ -13,8 +13,7 @@ sys.path.insert(0, project_root)
 if __name__ == "__main__":
     print("🚀 VOC Table Backend Server 시작 중...")
     print("📍 로컬 서버 주소: http://localhost:8000")
-    print("📍 내부망 서버 주소: http://172.16.5.75:8000")
-    print("📚 API 문서: http://172.16.5.75:8000/docs")
+    print("📚 API 문서: http://localhost:8000/docs")
     print("⏹️  서버 중지: Ctrl+C")
     print("-" * 50)
     

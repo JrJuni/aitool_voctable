@@ -14,8 +14,8 @@ import time
 import pymysql
 from sqlalchemy import create_engine
 
-# 데이터베이스 URL 가져오기
-db_url = os.getenv('DATABASE_URL', 'mysql+pymysql://voc_user:voc_password@mysql:3306/voc_database')
+# 데이터베이스 URL 가져오기 (환경변수 필수)
+db_url = os.environ['DATABASE_URL']
 
 # MySQL 연결 테스트
 try:
@@ -39,4 +39,4 @@ alembic upgrade head
 
 # 애플리케이션 시작
 echo "🎯 FastAPI 애플리케이션을 시작합니다..."
-exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+exec uvicorn app.main_new:app --host 0.0.0.0 --port 8000 --reload

@@ -23,9 +23,8 @@ COPY . .
 # 포트 노출
 EXPOSE 8000
 
-# 환경 변수 설정
+# 환경 변수 설정 (DATABASE_URL/JWT_SECRET 등 시크릿은 런타임에 주입한다 — 이미지에 굽지 않는다)
 ENV PYTHONPATH=/app
-ENV DATABASE_URL=mysql+pymysql://voc_user:voc_password@mysql:3306/voc_database
 
 # 헬스체크 추가
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \

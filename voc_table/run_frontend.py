@@ -13,7 +13,6 @@ def run_streamlit():
     
     print("🌐 VOC Table Frontend 시작 중...")
     print("📍 로컬 앱 주소: http://localhost:8501")
-    print("📍 내부망 앱 주소: http://172.16.5.75:8501")
     print("⏹️  앱 중지: Ctrl+C")
     print("-" * 50)
     

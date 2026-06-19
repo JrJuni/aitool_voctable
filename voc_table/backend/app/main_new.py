@@ -11,6 +11,7 @@ from . import crud, schemas
 from .db import get_db
 from .dependencies import get_current_user, require_auth_level, get_client_ip
 from .logging_conf import log_permission_denied
+from .config import settings
 
 # 라우터 import
 from .routers import auth, users, voc, companies, contacts, projects, ai, export
@@ -25,12 +26,7 @@ app = FastAPI(
 # CORS 설정
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:8501",
-        "http://172.16.5.75:8501",
-        "http://172.16.5.*:8501",
-        "http://172.16.5.75:8000",
-    ],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -80,10 +76,17 @@ async def setup_default_hr(db: Session = Depends(get_db), request: Request = Non
             "note": "Use existing admin accounts or contact system administrator"
         }
 
+    default_pw = settings.DEFAULT_RESET_PW
+    if not default_pw:
+        raise HTTPException(
+            status_code=503,
+            detail="DEFAULT_RESET_PW is not configured; cannot seed default admin"
+        )
+
     hr_admin_data = schemas.UserCreate(
-        email="admin@mobilint.com",
+        email=settings.DEFAULT_ADMIN_EMAIL,
         username="admin",
-        password="0000",
+        password=default_pw,
         auth_level=5,
         is_active=True
     )
@@ -93,7 +96,7 @@ async def setup_default_hr(db: Session = Depends(get_db), request: Request = Non
 
     return {
         "message": "Default HR admin account created successfully",
-        "credentials": {"email": "admin@mobilint.com", "password": "0000"},
+        "credentials": {"email": settings.DEFAULT_ADMIN_EMAIL, "password": "<DEFAULT_RESET_PW>"},
         "user": hr_admin
     }
 
@@ -104,10 +107,17 @@ async def setup_dummy_users(
     request: Request = None
 ):
     """더미 사용자 생성"""
+    default_pw = settings.DEFAULT_RESET_PW
+    if not default_pw:
+        raise HTTPException(
+            status_code=503,
+            detail="DEFAULT_RESET_PW is not configured; cannot seed dummy users"
+        )
+
     dummy_users_data = [
-        {"email": "user1@test.com", "username": "user1", "password": "0000", "auth_level": 1},
-        {"email": "user2@test.com", "username": "user2", "password": "0000", "auth_level": 2},
-        {"email": "user3@test.com", "username": "user3", "password": "0000", "auth_level": 3},
+        {"email": "user1@test.com", "username": "user1", "password": default_pw, "auth_level": 1},
+        {"email": "user2@test.com", "username": "user2", "password": default_pw, "auth_level": 2},
+        {"email": "user3@test.com", "username": "user3", "password": default_pw, "auth_level": 3},
     ]
 
     created_users = []

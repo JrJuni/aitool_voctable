@@ -8,6 +8,7 @@ from ..db import get_db
 from ..dependencies import get_current_user, require_auth_level, get_client_ip
 from ..logging_conf import log_permission_denied, log_user_update
 from ..permissions import check_user_permission, PermissionLevel
+from ..config import settings
 
 router = APIRouter()
 
@@ -277,7 +278,7 @@ async def reset_user_password(
     current_user: schemas.User = Depends(get_current_user),
     request: Request = None
 ):
-    """사용자 비밀번호 초기화 (0000으로 설정)"""
+    """사용자 비밀번호를 기본 초기화 비밀번호(DEFAULT_RESET_PW)로 설정"""
     target_user = crud.get_user_by_id(db, user_id)
     if not target_user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -289,7 +290,14 @@ async def reset_user_password(
             detail="Level 4+ required to reset other users' passwords"
         )
 
-    user_update = schemas.UserUpdate(password="0000")
+    default_pw = settings.DEFAULT_RESET_PW
+    if not default_pw:
+        raise HTTPException(
+            status_code=503,
+            detail="DEFAULT_RESET_PW is not configured; password reset is disabled"
+        )
+
+    user_update = schemas.UserUpdate(password=default_pw)
     ip = get_client_ip(request) if request else None
     db_user = crud.update_user(db=db, user_id=user_id, user_update=user_update, ip=ip)
 
@@ -298,10 +306,10 @@ async def reset_user_password(
 
     log_user_update(
         current_user.id, current_user.email,
-        {"password_reset": f"User {target_user.email} password reset to 0000"}, ip
+        {"password_reset": f"User {target_user.email} password reset to default"}, ip
     )
 
-    return {"message": "Password reset successfully to 0000"}
+    return {"message": "Password reset successfully to default password"}
 
 
 @router.delete("/{user_id}/hard")
